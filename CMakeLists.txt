@@ -33,10 +33,16 @@ target_compile_definitions(SimpleDaw PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SimpleDaw,JUCE_VERSION>"
 )
 
-# juce_gui_extra transitively pulls in juce_audio_basics, juce_audio_devices,
-# juce_audio_formats, juce_audio_processors, juce_audio_utils, etc.
+# Link the audio modules explicitly so juce_generate_juce_header picks them
+# up in the JuceHeader.h aggregator. juce_gui_extra transitively links the
+# code, but the auto-generated header only lists modules named here.
 target_link_libraries(SimpleDaw
     PRIVATE
+        juce::juce_audio_utils
+        juce::juce_audio_devices
+        juce::juce_audio_formats
+        juce::juce_audio_processors
+        juce::juce_dsp
         juce::juce_gui_extra
     PUBLIC
         juce::juce_recommended_config_flags
