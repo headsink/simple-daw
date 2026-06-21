@@ -1,74 +1,130 @@
 #include <JuceHeader.h>
 
-class SineAudioSource : public juce::AudioSource
+class SineVoice : public juce::SynthesiserVoice
 {
 public:
-    void prepareToPlay(int, double sampleRate) override
+    bool canPlaySound(juce::SynthesiserSound* sound) override
     {
-        currentSampleRate = sampleRate;
-        phase = 0.0;
+        return dynamic_cast<juce::SynthesiserSound*>(sound) != nullptr;
     }
 
-    void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override
+    void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int) override
     {
-        const float freq = frequencyHz.load();
-        const double phaseIncrement = freq / currentSampleRate;
+        currentAngle = 0.0;
+        level = velocity * 0.15;
+        const double cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
+        const double cyclesPerSample = cyclesPerSecond / getSampleRate();
+        angleDelta = cyclesPerSample * juce::MathConstants<double>::twoPi;
+    }
 
-        for (int ch = 0; ch < info.buffer->getNumChannels(); ++ch)
+    void stopNote(float, bool allowTailOff) override
+    {
+        level = 0.0;
+        clearCurrentNote();
+    }
+
+    void pitchWheelMoved(int) override {}
+    void controllerMoved(int, int) override {}
+
+    void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override
+    {
+        if (level <= 0.0)
+            return;
+
+        for (int sample = 0; sample < numSamples; ++sample)
         {
-            auto* samples = info.buffer->getWritePointer(ch, info.startSample);
-            for (int n = 0; n < info.numSamples; ++n)
-            {
-                samples[n] = 0.2f * std::sin(phase * juce::MathConstants<double>::twoPi);
-                phase += phaseIncrement;
-                if (phase >= 1.0) phase -= 1.0;
-            }
+            const float currentSample = (float)(level * std::sin(currentAngle));
+            for (int ch = 0; ch < outputBuffer.getNumChannels(); ++ch)
+                outputBuffer.addSample(ch, startSample + sample, currentSample);
+
+            currentAngle += angleDelta;
         }
+    }
+
+private:
+    double currentAngle = 0.0;
+    double angleDelta = 0.0;
+    double level = 0.0;
+};
+
+class DemoSound : public juce::SynthesiserSound
+{
+public:
+    bool appliesToNote(int) override        { return true; }
+    bool appliesToChannel(int) override     { return true; }
+};
+
+class SynthAudioSource : public juce::AudioSource
+{
+public:
+    SynthAudioSource()
+    {
+        for (int i = 0; i < 8; ++i)
+            synth.addVoice(new SineVoice());
+
+        synth.clearSounds();
+        synth.addSound(new DemoSound());
+    }
+
+    void prepareToPlay(int, double sampleRate) override
+    {
+        synth.setCurrentPlaybackSampleRate(sampleRate);
     }
 
     void releaseResources() override {}
 
-    std::atomic<float> frequencyHz{440.0f};
+    void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override
+    {
+        info.buffer->clear();
+        juce::MidiBuffer midi;
+        keyboardState.processNextMidiBuffer(midi, info.startSample, info.numSamples, true);
+        synth.renderNextBlock(*info.buffer, midi, info.startSample, info.numSamples);
+    }
+
+    juce::MidiKeyboardState keyboardState;
 
 private:
-    double currentSampleRate = 44100.0;
-    double phase = 0.0;
+    juce::Synthesiser synth;
 };
 
-class MainComponent : public juce::AudioAppComponent
+class MainComponent : public juce::AudioAppComponent,
+                      public juce::MidiInputCallback,
+                      public juce::Timer
 {
 public:
     MainComponent()
+        : midiKeyboard(synthSource.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
     {
-        setSize(600, 400);
+        setSize(900, 360);
 
-        addAndMakeVisible(frequencySlider);
-        frequencySlider.setRange(20.0, 5000.0, 1.0);
-        frequencySlider.setValue(440.0);
-        frequencySlider.setSliderStyle(juce::Slider::LinearHorizontal);
-        frequencySlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 80, 24);
-        frequencySlider.onValueChange = [this]
-        {
-            sineSource.frequencyHz.store((float)frequencySlider.getValue());
-        };
+        addAndMakeVisible(midiKeyboard);
+        midiKeyboard.setKeyWidth(28.0f);
+        midiKeyboard.setAvailableRange(36, 96);
+        midiKeyboard.setColour(juce::MidiKeyboardComponent::whiteNoteColourId, juce::Colour(0xfff0f0f0));
+        midiKeyboard.setColour(juce::MidiKeyboardComponent::blackNoteColourId, juce::Colour(0xff202020));
+        midiKeyboard.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour(0xff404040));
+        midiKeyboard.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x805080ff));
 
         addAndMakeVisible(statusLabel);
         statusLabel.setJustificationType(juce::Justification::centredLeft);
         statusLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
-        sineSource.frequencyHz.store((float)frequencySlider.getValue());
-
         setAudioChannels(0, 2);
+        openAllMidiInputs();
+
+        startTimer(500);
     }
 
     ~MainComponent() override
     {
+        stopTimer();
+        closeAllMidiInputs();
         shutdownAudio();
     }
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
     {
-        sineSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+        synthSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
 
         juce::String deviceName = "none";
         int bufferSize = 0;
@@ -79,20 +135,17 @@ public:
             bufferSize = device->getCurrentBufferSizeSamples();
             actualSampleRate = device->getCurrentSampleRate();
         }
-        statusLabel.setText("Device: " + deviceName
-            + "  |  Buffer: " + juce::String(bufferSize) + " samples"
-            + "  |  Rate: " + juce::String(actualSampleRate, 1) + " Hz",
-            juce::dontSendNotification);
+        updateStatus(deviceName, bufferSize, actualSampleRate);
     }
 
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override
     {
-        sineSource.getNextAudioBlock(bufferToFill);
+        synthSource.getNextAudioBlock(bufferToFill);
     }
 
     void releaseResources() override
     {
-        sineSource.releaseResources();
+        synthSource.releaseResources();
     }
 
     void paint(juce::Graphics& g) override
@@ -100,7 +153,7 @@ public:
         g.fillAll(juce::Colour(0xff1a1a1a));
         g.setColour(juce::Colours::white);
         g.setFont(juce::FontOptions(20.0f));
-        g.drawText("Simple DAW — Week 3 (sine source)", getLocalBounds().removeFromTop(40),
+        g.drawText("Simple DAW — Week 4 (MIDI synth)", getLocalBounds().removeFromTop(40),
                    juce::Justification::centred);
     }
 
@@ -108,15 +161,83 @@ public:
     {
         auto area = getLocalBounds().reduced(20);
         area.removeFromTop(40);
-        frequencySlider.setBounds(area.removeFromTop(40));
-        area.removeFromTop(20);
         statusLabel.setBounds(area.removeFromTop(24));
+        area.removeFromTop(8);
+        midiKeyboard.setBounds(area.removeFromTop(180));
+    }
+
+    void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message) override
+    {
+        const juce::String src = source != nullptr ? source->getName() : juce::String("unknown");
+        juce::Logger::writeToLog("MIDI in: " + src + " :: " + message.getDescription());
+
+        if (message.isNoteOnOrOff())
+            synthSource.keyboardState.processNextMidiEvent(message);
+    }
+
+    void timerCallback() override
+    {
+        juce::String deviceName = "none";
+        int bufferSize = 0;
+        double actualSampleRate = 0.0;
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+        {
+            deviceName = device->getName();
+            bufferSize = device->getCurrentBufferSizeSamples();
+            actualSampleRate = device->getCurrentSampleRate();
+        }
+        updateStatus(deviceName, bufferSize, actualSampleRate);
     }
 
 private:
-    SineAudioSource sineSource;
-    juce::Slider frequencySlider;
+    void openAllMidiInputs()
+    {
+        const auto devices = juce::MidiInput::getAvailableDevices();
+        juce::Logger::writeToLog("MIDI devices available: " + juce::String((int)devices.size()));
+        for (const auto& d : devices)
+        {
+            auto input = juce::MidiInput::openDevice(d.identifier, this);
+            if (input)
+            {
+                input->start();
+                openedInputs.add(input.release());
+                juce::Logger::writeToLog("Opened MIDI input: " + d.name);
+            }
+        }
+    }
+
+    void closeAllMidiInputs()
+    {
+        for (auto* input : openedInputs)
+        {
+            input->stop();
+            delete input;
+        }
+        openedInputs.clear();
+    }
+
+    void updateStatus(const juce::String& deviceName, int bufferSize, double actualSampleRate)
+    {
+        const int midiCount = (int)openedInputs.size();
+        juce::String midiList = "none";
+        if (midiCount > 0)
+        {
+            juce::StringArray names;
+            for (auto* in : openedInputs)
+                names.add(in->getName());
+            midiList = names.joinIntoString(", ");
+        }
+        statusLabel.setText("Device: " + deviceName
+            + "  |  Buffer: " + juce::String(bufferSize)
+            + "  |  Rate: " + juce::String(actualSampleRate, 1) + " Hz"
+            + "  |  MIDI (" + juce::String(midiCount) + "): " + midiList,
+            juce::dontSendNotification);
+    }
+
+    SynthAudioSource synthSource;
+    juce::MidiKeyboardComponent midiKeyboard;
     juce::Label statusLabel;
+    juce::OwnedArray<juce::MidiInput> openedInputs;
 };
 
 class SimpleDawApplication : public juce::JUCEApplication
