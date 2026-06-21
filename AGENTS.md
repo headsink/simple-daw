@@ -9,13 +9,20 @@
 ## Current state (as of last session)
 
 **Week 0 — Complete.** Toolchain scaffolded, JUCE 8 cloned, hello-world builds and runs.
-**Week 3 — Complete.** Audio I/O works end-to-end: `AudioAppComponent` + `SineAudioSource` + `juce::Slider` driving `std::atomic<float>` frequency. User confirmed tone plays through the Komplete Audio 1 interface and the slider changes pitch live without glitches. Committed to git.
+**Week 3 — Complete.** Audio I/O works end-to-end: `AudioAppComponent` + `SineAudioSource` + `juce::Slider` driving `std::atomic<float>` frequency. Tone plays through the Komplete Audio 1 interface, slider changes pitch live.
+**Week 4 — Complete.** MIDI synth works end-to-end: custom `SineVoice` + `juce::Synthesiser` + `MidiKeyboardState` + on-screen `MidiKeyboardComponent` (5 octaves) + auto-open all USB MIDI inputs (Komplete Audio 1 ports). User confirmed in-session that the build and smoke test passed. Committed to git.
 
 ### What's working
 
-- `CMakeLists.txt` — JUCE 8 GUI app target, `juce_generate_juce_header(SimpleDaw)`, links `juce::juce_audio_utils`, `juce::juce_audio_devices`, `juce::juce_audio_formats`, `juce::juce_audio_processors`, `juce::juce_dsp`, `juce::juce_gui_extra` (audio modules must be listed explicitly so `JuceHeader.h` aggregates them)
-- `src/Main.cpp` — `AudioAppComponent` with `SineAudioSource` (440 Hz sine into stereo), frequency `juce::Slider` 20 Hz–5 kHz, status `juce::Label` showing device/buffer/rate after `prepareToPlay`
-- `build-dev.bat` — initializes VsDevCmd, then runs CMake configure + build (Markdown Viewer pattern)
+- `CMakeLists.txt` — JUCE 8 GUI app target, `juce_generate_juce_header(SimpleDaw)`, links `juce_audio_utils`, `juce_audio_devices`, `juce_audio_formats`, `juce_audio_processors`, `juce_dsp`, `juce_gui_extra` (must be listed explicitly so `JuceHeader.h` aggregates them)
+- `src/Main.cpp` — `MainComponent : juce::AudioAppComponent + MidiInputCallback + Timer`:
+  - `SynthAudioSource` owns `juce::Synthesiser` (8 `SineVoice`s + 1 `DemoSound`) and a `juce::MidiKeyboardState`
+  - `SineVoice` — 8-voice polyphonic sine; velocity → amplitude; `MidiMessage::getMidiNoteInHertz` → frequency
+  - `DemoSound` — minimal `juce::SynthesiserSound` subclass (base ctor is protected + has pure-virtuals)
+  - On-screen `MidiKeyboardComponent` (5 octaves, C2 to C7) wired to the state
+  - `openAllMidiInputs()` opens every device from `MidiInput::getAvailableDevices()`; routes note-on/off into the same `MidiKeyboardState` so on-screen keys light up
+  - Status label refreshed by `Timer` every 500 ms: device / buffer / rate / open MIDI count + names
+- `build-dev.bat` — initializes VsDevCmd, then CMake configure + build (Markdown Viewer pattern)
 - `.gitignore` — excludes `build/`, `third_party/`, `.vs/`
 - `docs/learning-plan-juce-dsp.md` — full 6-week plan
 - `docs/learning-plan-week-0-2-3.md` — detailed expansion of Weeks 0, 2, 3
@@ -24,6 +31,7 @@
 
 - Build: `build-dev.bat Debug` produces `build\SimpleDaw_artefacts\Debug\Simple DAW.exe`
 - Audio: tone plays through Komplete Audio 1 ASIO, slider changes pitch live
+- MIDI synth: built and smoke-tested; on-screen keyboard + auto-opened MIDI inputs confirmed working (Komplete Audio 1 ports)
 - Toolchain: MSVC 19.44.35228, CMake 4.3.3 (winget-installed at `C:\Program Files\CMake\`), Git 2.53.0, SDK 10.0.26100.0
 
 ### Known quirks
@@ -33,6 +41,12 @@
 - **Output exe has a space:** JUCE's CMake helper nests it at `build\SimpleDaw_artefacts\<Config>\Simple DAW.exe`, not `build\<Config>\SimpleDaw.exe`. The bat script looks in the right place.
 - **OneDrive caveat (from Markdown Viewer):** if MSBuild ever complains about read-only files in `build/`, redirect output to `C:\Users\User\AppData\Local\Temp\opencode\simple-daw-target\` via `CMAKE_BUILD_DIR` or a `.cmake` user preset. Not needed yet.
 - **`JuceHeader.h` aggregation pitfall:** `juce_generate_juce_header` only includes modules named in `target_link_libraries`. Linking only `juce::juce_gui_extra` makes the auto header miss the audio modules — you get cryptic "identifier not found" / "unrelated types" errors. Solution: list `juce_audio_utils` / `juce_audio_devices` / `juce_audio_formats` / `juce_audio_processors` / `juce_dsp` explicitly. If you change the link list, delete `build\SimpleDaw_artefacts\JuceLibraryCode\` to force regeneration.
+- **`juce::SynthesiserSound` is not directly instantiable.** Constructor is protected and `appliesToNote` / `appliesToChannel` are pure virtual. Must subclass with a concrete `DemoSound` (or similar) that returns `true` for both. Don't trust the Week 3 plan doc on this — it says "use `juce::SynthesiserSound` directly" but the compiler rejects it.
+- **`MidiKeyboardComponent` has no `setNumOctavesForKeyboard`.** Use `setAvailableRange(int lowestNote, int highestNote)` to set the visible range, `setKeyWidth(float px)` to set key size. Constructor is `MidiKeyboardComponent(MidiKeyboardState&, Orientation)`.
+- **`MidiKeyboardComponent` colour IDs are limited.** `whiteNoteColourId`, `blackNoteColourId`, `keySeparatorLineColourId`, `mouseOverKeyOverlayColourId` exist. `mouseDownKeyFillColourId` does NOT exist on this class (it's on `KeyMappingEditorComponent`).
+- **`MidiInput::openDevice` returns the input directly (not a pointer).** Use `auto input = openDevice(...); if (input) { input->start(); openedInputs.add(input.release()); }`. The returned object's lifetime is yours.
+- **`MidiDeviceInfo` has no `isEnabled()`.** For "open all available", just iterate and call `openDevice`; it returns an empty object on failure which the `if (input)` check handles.
+- **MIDI input callback method is `handleIncomingMidiMessage(MidiInput*, MidiMessage&)`** (not `midiInputCallback`). Both are mentioned in docs but only the former is the actual interface method.
 
 ---
 
@@ -61,93 +75,75 @@ Output: `build\SimpleDaw_artefacts\<Config>\Simple DAW.exe`
 
 To launch: `& "build\SimpleDaw_artefacts\Debug\Simple DAW.exe"` from PowerShell, or double-click in Explorer.
 
+To see MIDI / audio logs while running, launch from PowerShell so the stdout is visible.
+
 ---
 
 ## Next session — pick up here
 
-**Recommended next: Week 4 (MIDI).** User's Komplete Audio 1 has MIDI ports — we can use the on-screen `MidiKeyboardComponent` immediately, and a USB controller when one is plugged in.
+**Recommended next: Audio track (load + play a WAV).** Reuses the audio engine from Week 3, completes the second MVP item, and unblocks multi-track + sequencer work that follows.
 
-### Week 4 plan
+### Audio track plan (sketch)
 
-1. Read `juce::MidiKeyboardState` and `juce::MidiKeyboardComponent` API references (~20 min)
-2. Read `juce::Synthesiser` and `juce::SynthesiserVoice` API references (~30 min) — focus on `renderNextBlock`
-3. Skim `third_party/JUCE/examples/CMake/AudioPlugin/PluginEditor.cpp` for a `MidiKeyboardComponent` + `Synthesiser` reference
-4. Refactor `src/Main.cpp`:
-   - Keep the existing `MainComponent` shell but make space for the keyboard and the synth
-   - Add a `SynthAudioSource : public juce::AudioSource` that owns a `juce::Synthesiser` and a `juce::MidiKeyboardState`
-   - In its `getNextAudioBlock`: call `keyboardState.processNextMidiBuffer(midi, ...)` to inject keyboard events, then `synth.renderNextBlock(buffer, midi, ...)`
-   - Add a `juce::MidiKeyboardComponent` wired to the state (8 octaves wide, visible on screen)
-   - Replace the `SineAudioSource` (or keep it as a test tone on a parallel path) — the synth is the new sound source
-5. (Optional) Open a USB MIDI device: in `initialise`, iterate `MidiInput::getAvailableDevices()`, log them, optionally auto-open the first one and call `startTimer` to keep the input callback running. JUCE's audio setup panel also exposes MIDI device selection.
-6. Build, run, confirm:
-   - The on-screen keyboard renders and is clickable
-   - Clicking keys produces sound (oscillator + simple ADSR envelope in a custom `SynthesiserVoice`)
-   - A USB MIDI controller plugged into the Komplete Audio 1 also produces sound
-7. **Stretch:** second oscillator with detune, simple filter in the voice, multi-voice polyphony check, velocity-sensitive amplitude
+1. Add a "Load WAV" button to the main window
+2. In the click handler, use `juce::FileChooser` to pick a `.wav` file
+3. Decode it via `juce::AudioFormatManager` + `juce::AudioFormatReader` → a `juce::AudioBuffer<float>` of samples
+4. Add a new `AudioTrackAudioSource : juce::AudioSource` that holds the decoded buffer and a read head; renders samples into the output block based on `playPosition`
+5. Add a transport: play / stop / seek (just a few buttons; no need to be a full `AudioPlayHead` yet)
+6. In `MainComponent::getNextAudioBlock`: clear the buffer, then have the audio track render into it (replace the synth for now; we'll mix them later)
+7. Build, run, drop a WAV in, hit play, hear it through the Komplete Audio 1
 
-### Code template (MIDI synth source)
+### Stretch (pick any)
+- Keep both the synth and the WAV track running in parallel (mix)
+- Loop the WAV between two markers
+- Add volume + pan sliders for the WAV track
+- Move `SineVoice` and `SynthAudioSource` into `src/audio/` and `src/midi/` subfolders (start the refactor — they're not part of `src/Main.cpp` once we have more components)
+
+### Why this and not the sequencer
+The piano roll / sequencer needs a `MidiClip` data model + a sequencer that turns it into `MidiBuffer` per `getNextAudioBlock`. The audio track is the simpler piece and uses the same engine we've already proven. Sequencing comes right after, with a clear dependency on the audio engine being correct.
+
+### Code template (audio track source)
 
 ```cpp
-class SineVoice : public juce::SynthesiserVoice
+class AudioTrackSource : public juce::AudioSource
 {
 public:
-    bool canPlaySound(juce::SynthesiserSound* sound) override { return dynamic_cast<juce::SynthesiserSound*>(sound) != nullptr; }
-    void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int) override
+    void loadFile(const juce::File& file)
     {
-        currentAngle = 0.0;
-        level = velocity * 0.15;
-        double cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
-        double cyclesPerSample = cyclesPerSecond / getSampleRate();
-        angleDelta = cyclesPerSample * juce::MathConstants<double>::twoPi;
+        juce::AudioFormatManager mgr;
+        mgr.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> reader(mgr.createReaderFor(file));
+        if (reader == nullptr) return;
+        fileBuffer.setSize((int)reader->numChannels, (int)reader->lengthInSamples);
+        reader->read(&fileBuffer, 0, (int)reader->lengthInSamples, 0, true, true);
+        playPosition = 0;
     }
-    void stopNote(float, bool allowTailOff) override
-    {
-        if (allowTailOff) { level = 0; clearCurrentNote(); }
-        else { level = 0; clearCurrentNote(); }
-    }
-    void pitchWheelMoved(int) override {}
-    void controllerMoved(int, int) override {}
-    void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override
-    {
-        if (level <= 0.0) return;
-        for (int sample = 0; sample < numSamples; ++sample)
-        {
-            const float currentSample = (float)(level * std::sin(currentAngle));
-            for (int ch = 0; ch < outputBuffer.getNumChannels(); ++ch)
-                outputBuffer.addSample(ch, startSample + sample, currentSample);
-            currentAngle += angleDelta;
-        }
-    }
-private:
-    double currentAngle = 0.0, angleDelta = 0.0, level = 0.0;
-};
 
-class SynthAudioSource : public juce::AudioSource
-{
-public:
-    SynthAudioSource() { for (int i = 0; i < 8; ++i) synth.addVoice(new SineVoice()); synth.clearSounds(); synth.addSound(new juce::SynthesiserSound()); }
-    void prepareToPlay(int, double sampleRate) override { synth.setCurrentPlaybackSampleRate(sampleRate); }
+    void setPlaying(bool shouldPlay) { playing = shouldPlay; }
+    void stop() { playPosition = 0; playing = false; }
+
+    void prepareToPlay(int, double) override {}
     void releaseResources() override {}
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override
     {
         info.buffer->clear();
-        juce::MidiBuffer midi;
-        keyboardState.processNextMidiBuffer(midi, info.startSample, info.numSamples, true);
-        synth.renderNextBlock(*info.buffer, midi, info.startSample, info.numSamples);
+        if (!playing || fileBuffer.getNumSamples() == 0) return;
+        const int numSamples = info.numSamples;
+        const int remaining = fileBuffer.getNumSamples() - playPosition;
+        const int toCopy = std::min(numSamples, remaining);
+        for (int ch = 0; ch < info.buffer->getNumChannels(); ++ch)
+            info.buffer->copyFrom(ch, info.startSample, fileBuffer, ch % fileBuffer.getNumChannels(),
+                                  playPosition, toCopy);
+        playPosition += toCopy;
+        if (playPosition >= fileBuffer.getNumSamples()) { playing = false; playPosition = 0; }
     }
-    juce::MidiKeyboardState keyboardState;
+
 private:
-    juce::Synthesiser synth;
+    juce::AudioBuffer<float> fileBuffer;
+    int playPosition = 0;
+    bool playing = false;
 };
 ```
-
-(Use `juce::SynthesiserSound` directly — it has a default empty sound class, or you can derive your own to gate `canPlaySound` cleanly.)
-
-### Stretch tasks (pick any)
-- Auto-open the first USB MIDI input on startup
-- Add a waveform selector (sine/saw/square) — one line in `SineVoice::startNote`
-- Add a `juce::Slider` for master amplitude with `juce::SmoothedValue<float>`
-- Show MIDI activity in the status label ("MIDI: 3 devices, Komplete MIDI in active")
 
 ---
 
@@ -161,6 +157,7 @@ private:
 - **MIDI**: JUCE's `MidiBuffer` + `Synthesiser` for v1; sequencing/piano roll is custom `juce::Component` work.
 - **Piano roll scope (decided)**: data model (`MidiNote` + `MidiClip`) is custom, UI is custom `juce::Component`s layered over a grid. JUCE provides the engine (sequencer feeds `MidiBuffer` to `Synthesiser` per `getNextAudioBlock`).
 - **Synth voice style**: custom `juce::SynthesiserVoice` subclass for v1. This keeps the door open for adding filter/envelope stages in Week 5 without rewriting the dispatch.
+- **MIDI device handling**: open all available `MidiInput` devices on startup; route everything through the same `MidiKeyboardState` so on-screen keys reflect external input. JUCE's audio setup panel still works for changing the selection.
 
 ---
 
@@ -173,9 +170,9 @@ simple-daw/
 ├── .gitignore                  ✓ done
 ├── README.md                   ✗ not yet
 ├── src/
-│   ├── Main.cpp                ✓ Week 3 (AudioAppComponent + SineAudioSource + Slider)
-│   ├── audio/                  ✗ Week 5+ (refactor: move source out of Main.cpp)
-│   ├── midi/                   ✗ Week 4+ (MidiNote, MidiClip, Sequencer)
+│   ├── Main.cpp                ✓ Week 4 (synth + keyboard + MIDI input)
+│   ├── audio/                  ✗ Next session (AudioTrackSource extracted here)
+│   ├── midi/                   ✗ Sequencer + MidiClip + MidiNote (after audio track)
 │   ├── tracks/                 ✗ Phase 2+ (AudioTrack, MidiTrack)
 │   ├── plugin/                 ✗ Week 6+ (VST3 host wrapper)
 │   └── ui/                     ✗ Phase 2+ (PianoRoll, Mixer, TrackView)
@@ -193,9 +190,9 @@ simple-daw/
 ## MVP order (from earlier planning)
 
 1. ✓ Week 0 toolchain
-2. ✓ **Week 3** — Audio I/O
-3. **Week 4** — MIDI input (next)
-4. Audio track (WAV load + playback)
+2. ✓ Week 3 — Audio I/O
+3. ✓ Week 4 — MIDI input
+4. **Audio track (WAV load + playback)** (next)
 5. Multi-track mixer
 6. Piano roll editor (custom `juce::Component`s)
 7. MIDI playback (sequencer → synth)

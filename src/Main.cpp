@@ -87,6 +87,75 @@ private:
     juce::Synthesiser synth;
 };
 
+class AudioTrackSource : public juce::AudioSource
+{
+public:
+    void prepareToPlay(int, double) override {}
+    void releaseResources() override {}
+
+    void loadFile(const juce::File& file)
+    {
+        juce::AudioFormatManager mgr;
+        mgr.registerBasicFormats();
+
+        std::unique_ptr<juce::AudioFormatReader> reader(mgr.createReaderFor(file));
+        if (reader == nullptr)
+        {
+            fileBuffer.setSize(0, 0);
+            loadedFileName = "(failed to load)";
+            return;
+        }
+
+        fileBuffer.setSize((int)reader->numChannels, (int)reader->lengthInSamples);
+        reader->read(&fileBuffer, 0, (int)reader->lengthInSamples, 0, true, true);
+        playPosition = 0;
+        playing = false;
+        loadedFileName = file.getFileName() + "  (" + juce::String(reader->numChannels)
+            + " ch, " + juce::String(reader->lengthInSamples) + " samples, "
+            + juce::String((int)reader->sampleRate) + " Hz)";
+    }
+
+    void setPlaying(bool shouldPlay) { playing = shouldPlay; }
+    void stop() { playing = false; playPosition = 0; }
+    void togglePlay() { playing = !playing; }
+    void seekToStart() { playPosition = 0; }
+
+    bool isLoaded() const { return fileBuffer.getNumSamples() > 0; }
+    const juce::String& getLoadedFileName() const { return loadedFileName; }
+    bool isPlaying() const { return playing; }
+
+    void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override
+    {
+        info.buffer->clear();
+        if (!playing || fileBuffer.getNumSamples() == 0)
+            return;
+
+        const int numSamples = info.numSamples;
+        const int remaining = fileBuffer.getNumSamples() - playPosition;
+        if (remaining <= 0)
+        {
+            playing = false;
+            playPosition = 0;
+            return;
+        }
+
+        const int toCopy = std::min(numSamples, remaining);
+        for (int ch = 0; ch < info.buffer->getNumChannels(); ++ch)
+        {
+            const int srcCh = ch % fileBuffer.getNumChannels();
+            info.buffer->copyFrom(ch, info.startSample, fileBuffer, srcCh,
+                                  playPosition, toCopy);
+        }
+        playPosition += toCopy;
+    }
+
+private:
+    juce::AudioBuffer<float> fileBuffer;
+    int playPosition = 0;
+    bool playing = false;
+    juce::String loadedFileName;
+};
+
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
                       public juce::Timer
@@ -95,7 +164,7 @@ public:
     MainComponent()
         : midiKeyboard(synthSource.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
     {
-        setSize(900, 360);
+        setSize(900, 460);
 
         addAndMakeVisible(midiKeyboard);
         midiKeyboard.setKeyWidth(28.0f);
@@ -105,12 +174,30 @@ public:
         midiKeyboard.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour(0xff404040));
         midiKeyboard.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x805080ff));
 
+        addAndMakeVisible(loadButton);
+        loadButton.setButtonText("Load WAV");
+        loadButton.onClick = [this] { openWavChooser(); };
+
+        addAndMakeVisible(playButton);
+        playButton.setButtonText("Play");
+        playButton.onClick = [this] { audioTrack.togglePlay(); updateTransportButtons(); };
+
+        addAndMakeVisible(stopButton);
+        stopButton.setButtonText("Stop");
+        stopButton.onClick = [this] { audioTrack.stop(); updateTransportButtons(); };
+
         addAndMakeVisible(statusLabel);
         statusLabel.setJustificationType(juce::Justification::centredLeft);
         statusLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
+        addAndMakeVisible(trackLabel);
+        trackLabel.setJustificationType(juce::Justification::centredLeft);
+        trackLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+        trackLabel.setText("Track: (no file loaded)", juce::dontSendNotification);
+
         setAudioChannels(0, 2);
         openAllMidiInputs();
+        updateTransportButtons();
 
         startTimer(500);
     }
@@ -125,6 +212,7 @@ public:
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
     {
         synthSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+        audioTrack.prepareToPlay(samplesPerBlockExpected, sampleRate);
 
         juce::String deviceName = "none";
         int bufferSize = 0;
@@ -140,12 +228,34 @@ public:
 
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override
     {
-        synthSource.getNextAudioBlock(bufferToFill);
+        juce::AudioBuffer<float> scratchBuffer(bufferToFill.buffer->getNumChannels(),
+                                               bufferToFill.numSamples);
+        juce::AudioSourceChannelInfo scratch(&scratchBuffer, 0, bufferToFill.numSamples);
+
+        scratchBuffer.clear();
+        synthSource.getNextAudioBlock(scratch);
+        const float synthGain = 0.6f;
+
+        juce::AudioBuffer<float> trackBuffer(bufferToFill.buffer->getNumChannels(),
+                                             bufferToFill.numSamples);
+        juce::AudioSourceChannelInfo trackInfo(&trackBuffer, 0, bufferToFill.numSamples);
+        audioTrack.getNextAudioBlock(trackInfo);
+        const float trackGain = 1.0f;
+
+        bufferToFill.buffer->clear();
+        for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch)
+        {
+            bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, scratchBuffer,
+                                         ch, 0, bufferToFill.numSamples, synthGain);
+            bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, trackBuffer,
+                                         ch, 0, bufferToFill.numSamples, trackGain);
+        }
     }
 
     void releaseResources() override
     {
         synthSource.releaseResources();
+        audioTrack.releaseResources();
     }
 
     void paint(juce::Graphics& g) override
@@ -153,7 +263,7 @@ public:
         g.fillAll(juce::Colour(0xff1a1a1a));
         g.setColour(juce::Colours::white);
         g.setFont(juce::FontOptions(20.0f));
-        g.drawText("Simple DAW — Week 4 (MIDI synth)", getLocalBounds().removeFromTop(40),
+        g.drawText("Simple DAW — audio track + MIDI synth", getLocalBounds().removeFromTop(40),
                    juce::Justification::centred);
     }
 
@@ -161,8 +271,21 @@ public:
     {
         auto area = getLocalBounds().reduced(20);
         area.removeFromTop(40);
+
         statusLabel.setBounds(area.removeFromTop(24));
         area.removeFromTop(8);
+
+        trackLabel.setBounds(area.removeFromTop(20));
+        area.removeFromTop(6);
+
+        auto buttonRow = area.removeFromTop(36);
+        loadButton.setBounds(buttonRow.removeFromLeft(120).reduced(2));
+        buttonRow.removeFromLeft(8);
+        playButton.setBounds(buttonRow.removeFromLeft(80).reduced(2));
+        buttonRow.removeFromLeft(4);
+        stopButton.setBounds(buttonRow.removeFromLeft(80).reduced(2));
+        area.removeFromTop(8);
+
         midiKeyboard.setBounds(area.removeFromTop(180));
     }
 
@@ -187,9 +310,30 @@ public:
             actualSampleRate = device->getCurrentSampleRate();
         }
         updateStatus(deviceName, bufferSize, actualSampleRate);
+        updateTransportButtons();
     }
 
 private:
+    void openWavChooser()
+    {
+        juce::FileChooser chooser("Select a WAV file to play",
+                                  juce::File::getSpecialLocation(juce::File::userMusicDirectory),
+                                  "*.wav;*.aif;*.aiff;*.flac;*.mp3");
+        const int flags = juce::FileBrowserComponent::openMode
+                        | juce::FileBrowserComponent::canSelectFiles;
+        chooser.launchAsync(flags, [this](const juce::FileChooser& fc)
+        {
+            auto file = fc.getResult();
+            if (file.existsAsFile())
+            {
+                audioTrack.loadFile(file);
+                trackLabel.setText("Track: " + audioTrack.getLoadedFileName(),
+                                   juce::dontSendNotification);
+                updateTransportButtons();
+            }
+        });
+    }
+
     void openAllMidiInputs()
     {
         const auto devices = juce::MidiInput::getAvailableDevices();
@@ -234,9 +378,24 @@ private:
             juce::dontSendNotification);
     }
 
+    void updateTransportButtons()
+    {
+        const bool loaded = audioTrack.isLoaded();
+        loadButton.setEnabled(true);
+        playButton.setEnabled(loaded);
+        stopButton.setEnabled(loaded);
+        playButton.setButtonText(audioTrack.isPlaying() ? "Pause" : "Play");
+    }
+
     SynthAudioSource synthSource;
+    AudioTrackSource audioTrack;
+
     juce::MidiKeyboardComponent midiKeyboard;
+    juce::TextButton loadButton;
+    juce::TextButton playButton;
+    juce::TextButton stopButton;
     juce::Label statusLabel;
+    juce::Label trackLabel;
     juce::OwnedArray<juce::MidiInput> openedInputs;
 };
 
