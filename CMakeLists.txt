@@ -21,14 +21,20 @@ juce_add_gui_app(SimpleDaw
 # include path. Main.cpp uses #include <JuceHeader.h>.
 juce_generate_juce_header(SimpleDaw)
 
-target_sources(SimpleDaw PRIVATE
-    src/Main.cpp
+# Glob all .cpp files under src/ so new modules (audio/, midi/, tracks/, plugin/,
+# ui/) are picked up automatically. CONFIGURE_DEPENDS makes CMake re-glob when
+# files are added or removed.
+file(GLOB_RECURSE SIMPLE_DAW_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
+
+target_sources(SimpleDaw PRIVATE ${SIMPLE_DAW_SOURCES})
 
 target_compile_definitions(SimpleDaw PRIVATE
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:SimpleDaw,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:SimpleDaw,JUCE_VERSION>"
 )

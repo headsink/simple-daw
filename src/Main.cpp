@@ -1,160 +1,6 @@
 #include <JuceHeader.h>
-
-class SineVoice : public juce::SynthesiserVoice
-{
-public:
-    bool canPlaySound(juce::SynthesiserSound* sound) override
-    {
-        return dynamic_cast<juce::SynthesiserSound*>(sound) != nullptr;
-    }
-
-    void startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int) override
-    {
-        currentAngle = 0.0;
-        level = velocity * 0.15;
-        const double cyclesPerSecond = juce::MidiMessage::getMidiNoteInHertz(midiNoteNumber);
-        const double cyclesPerSample = cyclesPerSecond / getSampleRate();
-        angleDelta = cyclesPerSample * juce::MathConstants<double>::twoPi;
-    }
-
-    void stopNote(float, bool allowTailOff) override
-    {
-        level = 0.0;
-        clearCurrentNote();
-    }
-
-    void pitchWheelMoved(int) override {}
-    void controllerMoved(int, int) override {}
-
-    void renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int startSample, int numSamples) override
-    {
-        if (level <= 0.0)
-            return;
-
-        for (int sample = 0; sample < numSamples; ++sample)
-        {
-            const float currentSample = (float)(level * std::sin(currentAngle));
-            for (int ch = 0; ch < outputBuffer.getNumChannels(); ++ch)
-                outputBuffer.addSample(ch, startSample + sample, currentSample);
-
-            currentAngle += angleDelta;
-        }
-    }
-
-private:
-    double currentAngle = 0.0;
-    double angleDelta = 0.0;
-    double level = 0.0;
-};
-
-class DemoSound : public juce::SynthesiserSound
-{
-public:
-    bool appliesToNote(int) override        { return true; }
-    bool appliesToChannel(int) override     { return true; }
-};
-
-class SynthAudioSource : public juce::AudioSource
-{
-public:
-    SynthAudioSource()
-    {
-        for (int i = 0; i < 8; ++i)
-            synth.addVoice(new SineVoice());
-
-        synth.clearSounds();
-        synth.addSound(new DemoSound());
-    }
-
-    void prepareToPlay(int, double sampleRate) override
-    {
-        synth.setCurrentPlaybackSampleRate(sampleRate);
-    }
-
-    void releaseResources() override {}
-
-    void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override
-    {
-        info.buffer->clear();
-        juce::MidiBuffer midi;
-        keyboardState.processNextMidiBuffer(midi, info.startSample, info.numSamples, true);
-        synth.renderNextBlock(*info.buffer, midi, info.startSample, info.numSamples);
-    }
-
-    juce::MidiKeyboardState keyboardState;
-
-private:
-    juce::Synthesiser synth;
-};
-
-class AudioTrackSource : public juce::AudioSource
-{
-public:
-    void prepareToPlay(int, double) override {}
-    void releaseResources() override {}
-
-    void loadFile(const juce::File& file)
-    {
-        juce::AudioFormatManager mgr;
-        mgr.registerBasicFormats();
-
-        std::unique_ptr<juce::AudioFormatReader> reader(mgr.createReaderFor(file));
-        if (reader == nullptr)
-        {
-            fileBuffer.setSize(0, 0);
-            loadedFileName = "(failed to load)";
-            return;
-        }
-
-        fileBuffer.setSize((int)reader->numChannels, (int)reader->lengthInSamples);
-        reader->read(&fileBuffer, 0, (int)reader->lengthInSamples, 0, true, true);
-        playPosition = 0;
-        playing = false;
-        loadedFileName = file.getFileName() + "  (" + juce::String(reader->numChannels)
-            + " ch, " + juce::String(reader->lengthInSamples) + " samples, "
-            + juce::String((int)reader->sampleRate) + " Hz)";
-    }
-
-    void setPlaying(bool shouldPlay) { playing = shouldPlay; }
-    void stop() { playing = false; playPosition = 0; }
-    void togglePlay() { playing = !playing; }
-    void seekToStart() { playPosition = 0; }
-
-    bool isLoaded() const { return fileBuffer.getNumSamples() > 0; }
-    const juce::String& getLoadedFileName() const { return loadedFileName; }
-    bool isPlaying() const { return playing; }
-
-    void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override
-    {
-        info.buffer->clear();
-        if (!playing || fileBuffer.getNumSamples() == 0)
-            return;
-
-        const int numSamples = info.numSamples;
-        const int remaining = fileBuffer.getNumSamples() - playPosition;
-        if (remaining <= 0)
-        {
-            playing = false;
-            playPosition = 0;
-            return;
-        }
-
-        const int toCopy = std::min(numSamples, remaining);
-        for (int ch = 0; ch < info.buffer->getNumChannels(); ++ch)
-        {
-            const int srcCh = ch % fileBuffer.getNumChannels();
-            info.buffer->copyFrom(ch, info.startSample, fileBuffer, srcCh,
-                                  playPosition, toCopy);
-        }
-        playPosition += toCopy;
-    }
-
-private:
-    juce::AudioBuffer<float> fileBuffer;
-    int playPosition = 0;
-    bool playing = false;
-    juce::String loadedFileName;
-};
+#include "midi/SynthAudioSource.h"
+#include "audio/AudioTrackSource.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -316,14 +162,19 @@ public:
 private:
     void openWavChooser()
     {
+        juce::Logger::writeToLog("Load WAV button clicked");
+        auto logFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+            .getChildFile("simple-daw-click.log");
+        logFile.appendText("Load WAV button clicked\n");
+
         juce::FileChooser chooser("Select a WAV file to play",
                                   juce::File::getSpecialLocation(juce::File::userMusicDirectory),
                                   "*.wav;*.aif;*.aiff;*.flac;*.mp3");
-        const int flags = juce::FileBrowserComponent::openMode
-                        | juce::FileBrowserComponent::canSelectFiles;
-        chooser.launchAsync(flags, [this](const juce::FileChooser& fc)
+        if (chooser.browseForFileToOpen())
         {
-            auto file = fc.getResult();
+            logFile.appendText("FileChooser returned a file\n");
+            auto file = chooser.getResult();
+            logFile.appendText("Result file: " + file.getFullPathName() + "\n");
             if (file.existsAsFile())
             {
                 audioTrack.loadFile(file);
@@ -331,7 +182,11 @@ private:
                                    juce::dontSendNotification);
                 updateTransportButtons();
             }
-        });
+        }
+        else
+        {
+            logFile.appendText("FileChooser cancelled\n");
+        }
     }
 
     void openAllMidiInputs()
