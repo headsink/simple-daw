@@ -2,6 +2,7 @@
 #include "midi/SynthAudioSource.h"
 #include "tracks/AudioTrack.h"
 #include "tracks/TrackRow.h"
+#include "plugin/PluginHost.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -28,6 +29,18 @@ public:
         addAndMakeVisible(addTrackButton);
         addTrackButton.setButtonText("+ Add Track");
         addTrackButton.onClick = [this] { addTrack(); };
+
+        addAndMakeVisible(scanPluginsButton);
+        scanPluginsButton.setButtonText("Scan VST3");
+        scanPluginsButton.onClick = [this]
+        {
+            scanPluginsButton.setEnabled(false);
+            juce::Timer::callAfterDelay(10, [this]
+            {
+                pluginHost.scanForPlugins();
+                scanPluginsButton.setEnabled(true);
+            });
+        };
 
         addAndMakeVisible(tracksContainer);
 
@@ -84,6 +97,9 @@ public:
         synthSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
         for (auto& t : tracks)
             t->prepareToPlay(samplesPerBlockExpected, sampleRate);
+
+        pluginHost.setSampleRate(sampleRate);
+        pluginHost.setBlockSize(samplesPerBlockExpected);
 
         masterGainSmoothed.reset(sampleRate, 0.05);
         masterGainSmoothed.setCurrentAndTargetValue(masterGainTarget.load());
@@ -184,7 +200,7 @@ private:
         track->prepareToPlay(2048, 48000.0);
 
         auto* trackPtr = track.get();
-        auto row = std::make_unique<TrackRow>(*trackPtr, [this](TrackRow* r) { removeTrack(r); });
+        auto row = std::make_unique<TrackRow>(*trackPtr, pluginHost, [this](TrackRow* r) { removeTrack(r); });
 
         tracks.push_back(std::move(track));
         trackRows.push_back(std::move(row));
@@ -217,16 +233,18 @@ private:
         area.removeFromTop(6);
 
         auto topRow = area.removeFromTop(28);
-        addTrackButton.setBounds(topRow.removeFromRight(120));
+        addTrackButton.setBounds(topRow.removeFromRight(110));
+        topRow.removeFromRight(8);
+        scanPluginsButton.setBounds(topRow.removeFromRight(90));
         topRow.removeFromRight(16);
         masterGainLabel.setBounds(topRow.removeFromRight(60));
         topRow.removeFromRight(4);
-        masterGainSlider.setBounds(topRow.removeFromRight(200));
+        masterGainSlider.setBounds(topRow.removeFromRight(180));
         area.removeFromTop(6);
 
         if (!trackRows.empty())
         {
-            const int trackHeight = TrackRow(trackRows.front()->getTrack(), nullptr).getPreferredHeight();
+            const int trackHeight = TrackRow::getPreferredHeight();
             int totalHeight = 0;
             for (size_t i = 0; i < trackRows.size(); ++i)
             {
@@ -304,12 +322,14 @@ private:
     }
 
     SynthAudioSource synthSource;
+    PluginHost pluginHost;
     std::vector<std::unique_ptr<AudioTrack>> tracks;
     std::vector<std::unique_ptr<TrackRow>> trackRows;
 
     juce::MidiKeyboardComponent midiKeyboard;
     juce::Component tracksContainer;
     juce::TextButton addTrackButton;
+    juce::TextButton scanPluginsButton;
     juce::Label statusLabel;
     juce::Label synthGainLabel;
     juce::Slider synthGainSlider;

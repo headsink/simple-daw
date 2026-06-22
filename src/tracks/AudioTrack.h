@@ -21,6 +21,14 @@ public:
     void setMute(bool m);
     void setSolo(bool s);
 
+    void setPlugin(std::unique_ptr<juce::AudioPluginInstance> p);
+    void clearPlugin();
+    bool hasPlugin() const { return plugin != nullptr; }
+    juce::AudioPluginInstance* getPlugin() const { return plugin.get(); }
+    void setPluginBypass(bool b) { pluginBypass.store(b); }
+    bool isPluginBypassed() const { return pluginBypass.load(); }
+    juce::String getPluginName() const;
+
     void renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples,
                     bool anyOtherTrackSoloed);
 
@@ -40,4 +48,10 @@ private:
     std::atomic<float> pan{0.0f};
     std::atomic<bool> mute{false};
     std::atomic<bool> solo{false};
+
+    std::unique_ptr<juce::AudioPluginInstance> plugin;
+    std::atomic<bool> pluginBypass{false};
+    juce::MidiBuffer pluginMidiBuffer;
+    double currentSampleRate = 48000.0;
+    int currentBlockSize = 512;
 };

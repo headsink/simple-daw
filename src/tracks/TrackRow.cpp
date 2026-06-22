@@ -1,7 +1,8 @@
 #include "TrackRow.h"
+#include "../plugin/PluginWindows.h"
 
-TrackRow::TrackRow(AudioTrack& t, std::function<void(TrackRow*)> removeCb)
-    : track(t), onRemove(std::move(removeCb))
+TrackRow::TrackRow(AudioTrack& t, PluginHost& host, std::function<void(TrackRow*)> removeCb)
+    : track(t), pluginHost(host), onRemove(std::move(removeCb))
 {
     addAndMakeVisible(nameLabel);
     nameLabel.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -67,6 +68,24 @@ TrackRow::TrackRow(AudioTrack& t, std::function<void(TrackRow*)> removeCb)
     loopButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff308030));
     loopButton.onClick = [this] { track.getSource().setLooping(loopButton.getToggleState()); };
 
+    addAndMakeVisible(loadPluginButton);
+    loadPluginButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff504020));
+    loadPluginButton.onClick = [this] { openPluginChooser(); };
+
+    addAndMakeVisible(bypassButton);
+    bypassButton.setClickingTogglesState(true);
+    bypassButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff806020));
+    bypassButton.onClick = [this] { track.setPluginBypass(bypassButton.getToggleState()); };
+    bypassButton.setEnabled(false);
+
+    addAndMakeVisible(editPluginButton);
+    editPluginButton.onClick = [this] { showPluginEditor(); };
+    editPluginButton.setEnabled(false);
+
+    addAndMakeVisible(pluginLabel);
+    pluginLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
+    pluginLabel.setText("(no plugin)", juce::dontSendNotification);
+
     addAndMakeVisible(removeButton);
     removeButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff803030));
     removeButton.onClick = [this]
@@ -75,6 +94,7 @@ TrackRow::TrackRow(AudioTrack& t, std::function<void(TrackRow*)> removeCb)
     };
 
     refreshTimeLabel();
+    refreshPluginLabel();
     updateButtons();
 }
 
@@ -89,41 +109,52 @@ void TrackRow::paint(juce::Graphics& g)
 void TrackRow::resized()
 {
     auto area = getLocalBounds().reduced(6);
-    const int buttonW = 60;
-    const int playW = 60;
-    const int stopW = 60;
-    const int timeW = 110;
-    const int removeW = 32;
-    const int nameW = 220;
-    const int gainW = 130;
-    const int panW = 110;
-    const int muteW = 50;
-    const int soloW = 50;
-    const int loopW = 50;
+    const int buttonW = 56;
+    const int playW = 56;
+    const int stopW = 56;
+    const int timeW = 100;
+    const int removeW = 28;
+    const int gainW = 120;
+    const int panW = 100;
+    const int muteW = 46;
+    const int soloW = 46;
+    const int loopW = 46;
+    const int pluginW = 50;
+    const int bypassW = 56;
+    const int editW = 44;
 
-    nameLabel.setBounds(area.removeFromTop(18));
+    nameLabel.setBounds(area.removeFromTop(16));
     area.removeFromTop(2);
 
-    auto buttonRow = area.removeFromTop(28);
-    loadButton.setBounds(buttonRow.removeFromLeft(buttonW).reduced(2, 4));
+    auto buttonRow = area.removeFromTop(26);
+    loadButton.setBounds(buttonRow.removeFromLeft(buttonW).reduced(2, 3));
     buttonRow.removeFromLeft(4);
-    playButton.setBounds(buttonRow.removeFromLeft(playW).reduced(2, 4));
+    playButton.setBounds(buttonRow.removeFromLeft(playW).reduced(2, 3));
     buttonRow.removeFromLeft(4);
-    stopButton.setBounds(buttonRow.removeFromLeft(stopW).reduced(2, 4));
+    stopButton.setBounds(buttonRow.removeFromLeft(stopW).reduced(2, 3));
+    buttonRow.removeFromLeft(6);
+    timeLabel.setBounds(buttonRow.removeFromLeft(timeW).reduced(2, 3));
+    buttonRow.removeFromLeft(6);
+    gainSlider.setBounds(buttonRow.removeFromLeft(gainW).reduced(0, 5));
+    buttonRow.removeFromLeft(4);
+    panSlider.setBounds(buttonRow.removeFromLeft(panW).reduced(0, 5));
+    buttonRow.removeFromLeft(4);
+    muteButton.setBounds(buttonRow.removeFromLeft(muteW).reduced(2, 3));
+    buttonRow.removeFromLeft(3);
+    soloButton.setBounds(buttonRow.removeFromLeft(soloW).reduced(2, 3));
+    buttonRow.removeFromLeft(3);
+    loopButton.setBounds(buttonRow.removeFromLeft(loopW).reduced(2, 3));
+    buttonRow.removeFromLeft(4);
+    loadPluginButton.setBounds(buttonRow.removeFromLeft(pluginW).reduced(2, 3));
+    buttonRow.removeFromLeft(3);
+    bypassButton.setBounds(buttonRow.removeFromLeft(bypassW).reduced(2, 3));
+    buttonRow.removeFromLeft(3);
+    editPluginButton.setBounds(buttonRow.removeFromLeft(editW).reduced(2, 3));
     buttonRow.removeFromLeft(8);
-    timeLabel.setBounds(buttonRow.removeFromLeft(timeW).reduced(2, 4));
-    buttonRow.removeFromLeft(8);
-    gainSlider.setBounds(buttonRow.removeFromLeft(gainW).reduced(0, 6));
-    buttonRow.removeFromLeft(6);
-    panSlider.setBounds(buttonRow.removeFromLeft(panW).reduced(0, 6));
-    buttonRow.removeFromLeft(6);
-    muteButton.setBounds(buttonRow.removeFromLeft(muteW).reduced(2, 4));
-    buttonRow.removeFromLeft(4);
-    soloButton.setBounds(buttonRow.removeFromLeft(soloW).reduced(2, 4));
-    buttonRow.removeFromLeft(4);
-    loopButton.setBounds(buttonRow.removeFromLeft(loopW).reduced(2, 4));
-    buttonRow.removeFromLeft(6);
-    removeButton.setBounds(buttonRow.removeFromRight(removeW).reduced(2, 4));
+    removeButton.setBounds(buttonRow.removeFromRight(removeW).reduced(2, 3));
+
+    auto pluginRow = area.removeFromTop(14);
+    pluginLabel.setBounds(pluginRow);
 }
 
 void TrackRow::openFile()
@@ -144,12 +175,70 @@ void TrackRow::openFile()
     }
 }
 
+void TrackRow::openPluginChooser()
+{
+    auto* dlg = new PluginChooserDialog(pluginHost,
+        [this](const juce::PluginDescription& desc)
+        {
+            pluginHost.createInstanceAsync(desc,
+                [this](std::unique_ptr<juce::AudioPluginInstance> inst, const juce::String& err)
+                {
+                    if (inst)
+                    {
+                        track.setPlugin(std::move(inst));
+                        juce::MessageManager::getInstance()->callAsync(
+                            [this] { refreshPluginLabel(); updateButtons(); });
+                    }
+                    else
+                    {
+                        juce::AlertWindow::showMessageBoxAsync(
+                            juce::MessageBoxIconType::WarningIcon,
+                            "Plugin Load Error",
+                            err.isEmpty() ? "Unknown error." : err);
+                    }
+                });
+        });
+    (void) dlg;
+}
+
+void TrackRow::showPluginEditor()
+{
+    auto* p = track.getPlugin();
+    if (p == nullptr) return;
+    new PluginEditorWindow(*p);
+}
+
 void TrackRow::updateButtons()
 {
     const bool loaded = track.getSource().isLoaded();
     playButton.setEnabled(loaded);
     stopButton.setEnabled(loaded);
     playButton.setButtonText(track.getSource().isPlaying() ? "Pause" : "Play");
+
+    const bool hasPlugin = track.hasPlugin();
+    bypassButton.setEnabled(hasPlugin);
+    editPluginButton.setEnabled(hasPlugin);
+    if (!hasPlugin)
+    {
+        bypassButton.setToggleState(false, juce::dontSendNotification);
+        track.setPluginBypass(false);
+    }
+}
+
+void TrackRow::refreshPluginLabel()
+{
+    if (track.hasPlugin())
+    {
+        juce::String txt = track.getPluginName();
+        if (track.isPluginBypassed()) txt += "  [bypassed]";
+        pluginLabel.setText(txt, juce::dontSendNotification);
+        pluginLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    }
+    else
+    {
+        pluginLabel.setText("(no plugin)", juce::dontSendNotification);
+        pluginLabel.setColour(juce::Label::textColourId, juce::Colours::grey);
+    }
 }
 
 void TrackRow::refreshTimeLabel()

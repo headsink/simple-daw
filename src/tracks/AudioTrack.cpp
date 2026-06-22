@@ -7,13 +7,26 @@ AudioTrack::AudioTrack()
 
 void AudioTrack::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
+    currentSampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
+    currentBlockSize = samplesPerBlockExpected > 0 ? samplesPerBlockExpected : 512;
+
     source->prepareToPlay(samplesPerBlockExpected, sampleRate);
     scratchBuffer.setSize(2, samplesPerBlockExpected);
+
+    if (plugin)
+    {
+        plugin->prepareToPlay(currentSampleRate, currentBlockSize);
+        juce::AudioProcessor::BusesLayout stereo;
+        stereo.inputBuses.add(juce::AudioChannelSet::stereo());
+        stereo.outputBuses.add(juce::AudioChannelSet::stereo());
+        plugin->setBusesLayout(stereo);
+    }
 }
 
 void AudioTrack::releaseResources()
 {
     source->releaseResources();
+    if (plugin) plugin->releaseResources();
     scratchBuffer.setSize(0, 0);
 }
 
@@ -27,16 +40,48 @@ void AudioTrack::setPan(float p)  { pan.store(juce::jlimit(-1.0f, 1.0f, p)); }
 void AudioTrack::setMute(bool m)  { mute.store(m); }
 void AudioTrack::setSolo(bool s)  { solo.store(s); }
 
+void AudioTrack::setPlugin(std::unique_ptr<juce::AudioPluginInstance> p)
+{
+    if (plugin) plugin->releaseResources();
+    plugin = std::move(p);
+    if (plugin)
+    {
+        plugin->prepareToPlay(currentSampleRate, currentBlockSize);
+        juce::AudioProcessor::BusesLayout stereo;
+        stereo.inputBuses.add(juce::AudioChannelSet::stereo());
+        stereo.outputBuses.add(juce::AudioChannelSet::stereo());
+        plugin->setBusesLayout(stereo);
+    }
+}
+
+void AudioTrack::clearPlugin()
+{
+    if (plugin) plugin->releaseResources();
+    plugin.reset();
+    pluginBypass.store(false);
+}
+
+juce::String AudioTrack::getPluginName() const
+{
+    return plugin ? plugin->getName() : juce::String();
+}
+
 void AudioTrack::renderInto(juce::AudioBuffer<float>& dest, int startSample, int numSamples,
                             bool anyOtherTrackSoloed)
 {
     if (mute.load()) return;
     if (anyOtherTrackSoloed && !solo.load()) return;
-    if (!source->isLoaded()) return;
+    if (!source->isLoaded() && !plugin) return;
 
     scratchBuffer.clear();
     juce::AudioSourceChannelInfo scratch(&scratchBuffer, 0, numSamples);
     source->getNextAudioBlock(scratch);
+
+    if (plugin && !pluginBypass.load())
+    {
+        pluginMidiBuffer.clear();
+        plugin->processBlock(scratchBuffer, pluginMidiBuffer);
+    }
 
     const float g = gain.load();
     const float p = pan.load();
