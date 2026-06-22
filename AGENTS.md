@@ -22,6 +22,7 @@
 **Docs — Complete.** `README.md` and `docs/daw-architecture.md` created. Title-bar encoding bug was already fixed in source (plain ASCII `"Simple DAW"`); removed stale TODO.
 **A/B region loop (Option 2) — Complete.** `AudioTrackSource` gains `std::atomic<int> loopStart{0}` / `loopEnd{0}`. Default `loopEnd = numSamples` so the existing full-file loop keeps working when A/B is not set. `getNextAudioBlock` clamps the playhead to `[loopStart, loopEnd)` and wraps to `loopStart` (not 0) when `looping` is on. **A/B** button in `TrackRow` opens a collapsible second row with **Set A** / **Set B** buttons (capture current playhead), two horizontal sliders for fine adjustment, a **Clear** button, and a status label showing region length. `TrackRow` height is dynamic: 76 px collapsed, 126 px with A/B panel open. `MainComponent` wraps `tracksContainer` in a `juce::Viewport` (220 px tall) so a row with the A/B panel open can no longer push the MIDI keyboard off-screen.
 **Piano roll / sequencer Phase 1 (data + engine) — Complete.** `MidiNote { pitch, startBeat, lengthBeats, velocity }`, `MidiClip` (owns `std::vector<MidiNote>`, `loadDemoMelody()` pre-populates a C major scale, 8 beats), `MidiTrack : juce::AudioSource` (owns `MidiClip` + `juce::Synthesiser` with 8 `SineVoice`s + beat clock). `getNextAudioBlock` advances the beat clock by `numSamples/sampleRate * bpm/60`, emits sample-accurate `noteOn`/`noteOff` into a `MidiBuffer`, renders through the synth. Handles loop wrapping (split block at wrap point, kill held notes, re-emit from beat 0) and non-loop end (stop + kill all). `MainComponent` adds a sequencer row: **Seq Play** / **Seq Stop** / **Loop** / **BPM** slider (40-240, default 120) / beat position label (`beat: 3.0 / 8.0`). MIDI track output mixed into master bus with its own `midiGain` slider (default 0.5).
+**Piano roll Phase 2 (UI) — Complete.** `PianoRollComponent : juce::Component + juce::Timer` (30 fps playhead). Left piano keys (click to audition via `MidiKeyboardState`), grid with bar/beat lines, black/white key row backgrounds. **Drag-to-draw** new notes (snap to grid), **drag to move** notes (pitch + beat), **drag right edge to resize**, **right-click to delete**. Snap combo: 1/4, 1/8, 1/16, 1/16T (triplet). Red playhead line reads `MidiTrack::getCurrentBeat()`. Opens in a `PianoRollWindow : juce::DocumentWindow` (760×440, resizable, native title bar, self-deletes on close). `MainComponent` tracks the open window via raw pointer + `onClosed` callback (deletes in destructor). `MidiClip` gained a `juce::CriticalSection lock`; `PianoRollComponent` uses `ScopedLock` when modifying notes, `MidiTrack::emitNoteOns` uses `ScopedTryLock` (skips note scanning if locked — tries again next block).
 
 ### What's working
 
@@ -128,17 +129,19 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 
 ## Next session — pick up here
 
-**Piano roll / sequencer Phase 1 (data + engine) — Complete.** `MidiNote` + `MidiClip` + `MidiTrack` with beat clock, sample-accurate note scheduling, loop wrapping, and demo melody. Runtime test pending.
+**Piano roll Phase 2 (UI) — Complete.** Grid + keys + draw/move/resize/delete + snap + playhead. Runtime test pending.
 
-**Recommended next: Piano roll Phase 2 — UI.** Build `PianoRollComponent : juce::Component` on top of the Phase 1 data model:
+**Recommended next: pick a stretch task.** The core DAW is now functional: multi-track audio mixer with VST3 inserts, A/B looping, MIDI sequencer with piano roll editor. The remaining items are polish and I/O:
 
-### Piano roll Phase 2 — UI plan
-
-- `PianoRollComponent : juce::Component` — left piano keys (click to audition), grid with bars/beats, drag-to-draw notes, drag-to-resize, right-click delete.
-- Snap-to-grid (1/4, 1/8, 1/16, triplet).
-- Playhead that scrolls during playback (reads `MidiTrack::getCurrentBeat()`).
-- Velocity lane at the bottom (optional, stretch).
-- Open the piano roll in a `DocumentWindow` or as a toggleable panel below the sequencer row.
+### Stretch tasks (pick any)
+- **ASIO audio settings panel** — switch from WASAPI to Komplete Audio ASIO for ~2-3 ms latency.
+- **Master peak meter** — `getMagnitude(channel, 0, numSamples)` repainted from a `Timer`.
+- **JSON save/load** — restore tracks + plugin state + MIDI clips on relaunch.
+- **`juce::MidiOutput`** — route on-screen keyboard notes to a selectable MIDI out.
+- **Velocity lane** in the piano roll (bottom strip, drag to adjust velocity per note).
+- **Piano roll improvements**: horizontal scroll for clips > 8 beats, zoom, copy/paste notes, undo/redo.
+- **Release build** benchmark.
+- **App icon** via `juce_add_app_icon` or manual `.ico`.
 
 ### Other stretch tasks (pick any)
 - **ASIO audio settings panel** — switch from WASAPI to Komplete Audio ASIO for ~2-3 ms latency.
@@ -195,7 +198,7 @@ simple-daw/
 │   │   ├── SynthAudioSource.h  ✓
 │   │   ├── SynthAudioSource.cpp ✓
 │   │   ├── MidiNote.h          ✓ Phase 1 data (pitch, startBeat, lengthBeats, velocity)
-│   │   ├── MidiClip.h          ✓ Phase 1 data (vector<MidiNote> + loadDemoMelody)
+│   │   ├── MidiClip.h          ✓ Phase 1 data (vector<MidiNote> + loadDemoMelody + CriticalSection lock)
 │   │   ├── MidiClip.cpp        ✓
 │   │   ├── MidiTrack.h         ✓ Phase 1 engine (AudioSource + beat clock + synth + note scheduling)
 │   │   └── MidiTrack.cpp       ✓
@@ -208,7 +211,9 @@ simple-daw/
 │   │   ├── PluginHost.h        ✓ AudioPluginFormatManager + KnownPluginList wrapper
 │   │   ├── PluginHost.cpp      ✓
 │   │   └── PluginWindows.h     ✓ PluginChooserDialog + PluginEditorWindow (inline)
-│   └── ui/                     ✗ Phase 2 (PianoRollComponent)
+│   ├── ui/
+│   │   ├── PianoRollComponent.h   ✓ Phase 2 UI (grid + keys + draw/move/resize/delete + snap + playhead)
+│   │   └── PianoRollComponent.cpp ✓
 ├── third_party/
 │   └── JUCE/                   ✓ cloned
 ├── docs/
@@ -233,11 +238,11 @@ simple-daw/
 9. ✓ **VST3 insert** (Load / Bypass / Edit per track)
 10. ✓ **A/B region loop** (Set A / Set B / Clear / sliders, collapsible panel, Viewport)
 11. ✓ **Piano roll Phase 1** (MidiNote + MidiClip + MidiTrack engine + demo melody)
-12. **Piano roll Phase 2 — UI** (next)
-13. MIDI playback (sequencer → synth) — partly done (engine works, UI pending)
+12. ✓ **Piano roll Phase 2 — UI** (PianoRollComponent + PianoRollWindow)
+13. MIDI playback (sequencer → synth) — done (engine + UI)
 14. Recording (ASIO input → audio track)
 
-**Piano roll Phase 1 is complete. Next: Phase 2 — UI.**
+**Piano roll Phase 2 is complete. Next: pick a stretch task.**
 
 ---
 

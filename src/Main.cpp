@@ -4,6 +4,7 @@
 #include "tracks/AudioTrack.h"
 #include "tracks/TrackRow.h"
 #include "plugin/PluginHost.h"
+#include "ui/PianoRollComponent.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -89,6 +90,21 @@ public:
             midiTrack.setLooping(seqLoopButton.getToggleState());
         };
 
+        addAndMakeVisible(pianoRollButton);
+        pianoRollButton.setButtonText("Piano Roll");
+        pianoRollButton.onClick = [this]
+        {
+            if (pianoRollWindow == nullptr)
+            {
+                pianoRollWindow = new PianoRollWindow(midiTrack, synthSource.keyboardState,
+                    [this] { pianoRollWindow = nullptr; });
+            }
+            else
+            {
+                pianoRollWindow->toFront(true);
+            }
+        };
+
         addAndMakeVisible(seqBeatLabel);
         seqBeatLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
         seqBeatLabel.setJustificationType(juce::Justification::centredLeft);
@@ -157,6 +173,8 @@ public:
         stopTimer();
         closeAllMidiInputs();
         shutdownAudio();
+
+        if (pianoRollWindow) { delete pianoRollWindow; pianoRollWindow = nullptr; }
 
         trackRows.clear();
         tracks.clear();
@@ -342,6 +360,8 @@ private:
         seqStopButton.setBounds(seqRow.removeFromLeft(70).reduced(2, 3));
         seqRow.removeFromLeft(4);
         seqLoopButton.setBounds(seqRow.removeFromLeft(50).reduced(2, 3));
+        seqRow.removeFromLeft(4);
+        pianoRollButton.setBounds(seqRow.removeFromLeft(80).reduced(2, 3));
         seqRow.removeFromLeft(8);
         bpmLabel.setBounds(seqRow.removeFromLeft(40));
         seqRow.removeFromLeft(4);
@@ -442,9 +462,11 @@ private:
     juce::TextButton seqPlayButton;
     juce::TextButton seqStopButton;
     juce::TextButton seqLoopButton;
+    juce::TextButton pianoRollButton;
     juce::Label bpmLabel;
     juce::Slider bpmSlider;
     juce::Label seqBeatLabel;
+    PianoRollWindow* pianoRollWindow = nullptr;
     juce::Label statusLabel;
     juce::Label synthGainLabel;
     juce::Slider synthGainSlider;

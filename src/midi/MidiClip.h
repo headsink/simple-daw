@@ -26,6 +26,8 @@ public:
 
     void loadDemoMelody();
 
+    juce::CriticalSection lock;
+
 private:
     int id = 0;
     double startBeat = 0.0;

@@ -76,6 +76,9 @@ void MidiTrack::emitPendingNoteOffs(juce::MidiBuffer& midi, double beatRangeStar
 void MidiTrack::emitNoteOns(juce::MidiBuffer& midi, double beatRangeStart,
                             double beatRangeEnd, int numSamples)
 {
+    const juce::ScopedTryLock sl(clip.lock);
+    if (! sl.isLocked()) return;
+
     for (const auto& note : clip.getNotes())
     {
         if (note.startBeat >= beatRangeStart && note.startBeat < beatRangeEnd)
