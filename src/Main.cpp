@@ -50,6 +50,22 @@ public:
         setAudioChannels(0, 2);
         openAllMidiInputs();
 
+        addAndMakeVisible(masterGainLabel);
+        masterGainLabel.setText("Master", juce::dontSendNotification);
+        masterGainLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+        masterGainLabel.setJustificationType(juce::Justification::centredRight);
+
+        addAndMakeVisible(masterGainSlider);
+        masterGainSlider.setRange(0.0, 2.0, 0.01);
+        masterGainSlider.setValue(0.8);
+        masterGainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+        masterGainSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+        masterGainSlider.setTextBoxIsEditable(false);
+        masterGainSlider.onValueChange = [this]
+        {
+            masterGainTarget.store((float)masterGainSlider.getValue());
+        };
+
         addTrack();
         refreshLayout();
 
@@ -68,6 +84,9 @@ public:
         synthSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
         for (auto& t : tracks)
             t->prepareToPlay(samplesPerBlockExpected, sampleRate);
+
+        masterGainSmoothed.reset(sampleRate, 0.05);
+        masterGainSmoothed.setCurrentAndTargetValue(masterGainTarget.load());
 
         juce::String deviceName = "none";
         int bufferSize = 0;
@@ -104,6 +123,11 @@ public:
         for (auto& t : tracks)
             t->renderInto(*bufferToFill.buffer, bufferToFill.startSample,
                           bufferToFill.numSamples, anyTrackSoloed);
+
+        masterGainSmoothed.setTargetValue(masterGainTarget.load());
+        const float master = masterGainSmoothed.getNextValue();
+        for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch)
+            bufferToFill.buffer->applyGain(ch, bufferToFill.startSample, bufferToFill.numSamples, master);
     }
 
     void releaseResources() override
@@ -148,6 +172,9 @@ public:
             actualSampleRate = device->getCurrentSampleRate();
         }
         updateStatus(deviceName, bufferSize, actualSampleRate);
+
+        for (auto& row : trackRows)
+            row->refreshTimeLabel();
     }
 
 private:
@@ -189,7 +216,12 @@ private:
         statusLabel.setBounds(area.removeFromTop(20));
         area.removeFromTop(6);
 
-        addTrackButton.setBounds(area.removeFromTop(28).removeFromRight(120));
+        auto topRow = area.removeFromTop(28);
+        addTrackButton.setBounds(topRow.removeFromRight(120));
+        topRow.removeFromRight(16);
+        masterGainLabel.setBounds(topRow.removeFromRight(60));
+        topRow.removeFromRight(4);
+        masterGainSlider.setBounds(topRow.removeFromRight(200));
         area.removeFromTop(6);
 
         if (!trackRows.empty())
@@ -281,9 +313,13 @@ private:
     juce::Label statusLabel;
     juce::Label synthGainLabel;
     juce::Slider synthGainSlider;
+    juce::Label masterGainLabel;
+    juce::Slider masterGainSlider;
     juce::OwnedArray<juce::MidiInput> openedInputs;
     juce::AudioBuffer<float> scratchBuffer;
     std::atomic<float> synthGain{0.6f};
+    std::atomic<float> masterGainTarget{0.8f};
+    juce::SmoothedValue<float> masterGainSmoothed{0.8f};
 };
 
 class SimpleDawApplication : public juce::JUCEApplication

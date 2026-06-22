@@ -15,16 +15,22 @@ public:
     void stop();
     void togglePlay();
     void seekToStart();
+    void setLooping(bool shouldLoop);
 
     bool isLoaded() const;
     bool isPlaying() const;
+    bool isLooping() const;
     const juce::String& getLoadedFileName() const;
     int getNumChannels() const;
     int getNumSamples() const;
+    int getPlayPosition() const;
+    double getSampleRate() const { return currentSampleRate; }
 
 private:
     juce::AudioBuffer<float> fileBuffer;
-    int playPosition = 0;
+    std::atomic<int> playPosition{0};
     std::atomic<bool> playing{false};
+    std::atomic<bool> looping{false};
+    double currentSampleRate = 44100.0;
     juce::String loadedFileName;
 };
