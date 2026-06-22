@@ -68,6 +68,88 @@ TrackRow::TrackRow(AudioTrack& t, PluginHost& host, std::function<void(TrackRow*
     loopButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff308030));
     loopButton.onClick = [this] { track.getSource().setLooping(loopButton.getToggleState()); };
 
+    addAndMakeVisible(abButton);
+    abButton.setClickingTogglesState(true);
+    abButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff505050));
+    abButton.onClick = [this] { toggleAbPanel(); };
+
+    addAndMakeVisible(setAButton);
+    setAButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff305030));
+    setAButton.onClick = [this]
+    {
+        track.setLoopStartFromPlayhead();
+        refreshAbLabels();
+    };
+    setAButton.setVisible(false);
+
+    addAndMakeVisible(setBButton);
+    setBButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff503030));
+    setBButton.onClick = [this]
+    {
+        track.setLoopEndFromPlayhead();
+        refreshAbLabels();
+    };
+    setBButton.setVisible(false);
+
+    addAndMakeVisible(clearAbButton);
+    clearAbButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff404040));
+    clearAbButton.onClick = [this]
+    {
+        track.clearLoopRegion();
+        refreshAbLabels();
+    };
+    clearAbButton.setVisible(false);
+
+    addAndMakeVisible(startSlider);
+    startSlider.setRange(0.0, 1.0, 1.0);
+    startSlider.setValue(0.0);
+    startSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    startSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    startSlider.onValueChange = [this]
+    {
+        const int total = track.getSource().getNumSamples();
+        if (total <= 0) return;
+        const int s = (int) startSlider.getValue();
+        track.setLoopStart(s);
+        if (track.getLoopEnd() < s) track.setLoopEnd(s);
+        refreshAbLabels();
+    };
+    startSlider.setVisible(false);
+
+    addAndMakeVisible(endSlider);
+    endSlider.setRange(0.0, 1.0, 1.0);
+    endSlider.setValue(1.0);
+    endSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    endSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    endSlider.onValueChange = [this]
+    {
+        const int total = track.getSource().getNumSamples();
+        if (total <= 0) return;
+        const int e = (int) endSlider.getValue();
+        track.setLoopEnd(e);
+        if (track.getLoopStart() > e) track.setLoopStart(e);
+        refreshAbLabels();
+    };
+    endSlider.setVisible(false);
+
+    addAndMakeVisible(startValueLabel);
+    startValueLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+    startValueLabel.setJustificationType(juce::Justification::centredLeft);
+    startValueLabel.setText("A: 0:00.0", juce::dontSendNotification);
+    startValueLabel.setVisible(false);
+
+    addAndMakeVisible(endValueLabel);
+    endValueLabel.setColour(juce::Label::textColourId, juce::Colour(0xffff8080));
+    endValueLabel.setJustificationType(juce::Justification::centredLeft);
+    endValueLabel.setText("B: 0:00.0", juce::dontSendNotification);
+    endValueLabel.setVisible(false);
+
+    addAndMakeVisible(abStatusLabel);
+    abStatusLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+    abStatusLabel.setJustificationType(juce::Justification::centredLeft);
+    abStatusLabel.setText("", juce::dontSendNotification);
+    abStatusLabel.setVisible(false);
+
     addAndMakeVisible(loadPluginButton);
     loadPluginButton.setColour(juce::TextButton::buttonColourId, juce::Colour(0xff504020));
     loadPluginButton.onClick = [this] { openPluginChooser(); };
@@ -109,52 +191,127 @@ void TrackRow::paint(juce::Graphics& g)
 void TrackRow::resized()
 {
     auto area = getLocalBounds().reduced(6);
-    const int buttonW = 56;
-    const int playW = 56;
-    const int stopW = 56;
-    const int timeW = 100;
-    const int removeW = 28;
-    const int gainW = 120;
-    const int panW = 100;
-    const int muteW = 46;
-    const int soloW = 46;
-    const int loopW = 46;
-    const int pluginW = 50;
-    const int bypassW = 56;
-    const int editW = 44;
+    const int nameRowH = 16;
+    const int buttonRowH = 26;
+    const int pluginRowH = 14;
 
-    nameLabel.setBounds(area.removeFromTop(16));
+    nameLabel.setBounds(area.removeFromTop(nameRowH));
     area.removeFromTop(2);
 
-    auto buttonRow = area.removeFromTop(26);
-    loadButton.setBounds(buttonRow.removeFromLeft(buttonW).reduced(2, 3));
-    buttonRow.removeFromLeft(4);
-    playButton.setBounds(buttonRow.removeFromLeft(playW).reduced(2, 3));
-    buttonRow.removeFromLeft(4);
-    stopButton.setBounds(buttonRow.removeFromLeft(stopW).reduced(2, 3));
-    buttonRow.removeFromLeft(6);
-    timeLabel.setBounds(buttonRow.removeFromLeft(timeW).reduced(2, 3));
-    buttonRow.removeFromLeft(6);
-    gainSlider.setBounds(buttonRow.removeFromLeft(gainW).reduced(0, 5));
-    buttonRow.removeFromLeft(4);
-    panSlider.setBounds(buttonRow.removeFromLeft(panW).reduced(0, 5));
-    buttonRow.removeFromLeft(4);
-    muteButton.setBounds(buttonRow.removeFromLeft(muteW).reduced(2, 3));
-    buttonRow.removeFromLeft(3);
-    soloButton.setBounds(buttonRow.removeFromLeft(soloW).reduced(2, 3));
-    buttonRow.removeFromLeft(3);
-    loopButton.setBounds(buttonRow.removeFromLeft(loopW).reduced(2, 3));
-    buttonRow.removeFromLeft(4);
-    loadPluginButton.setBounds(buttonRow.removeFromLeft(pluginW).reduced(2, 3));
-    buttonRow.removeFromLeft(3);
-    bypassButton.setBounds(buttonRow.removeFromLeft(bypassW).reduced(2, 3));
-    buttonRow.removeFromLeft(3);
-    editPluginButton.setBounds(buttonRow.removeFromLeft(editW).reduced(2, 3));
-    buttonRow.removeFromLeft(8);
-    removeButton.setBounds(buttonRow.removeFromRight(removeW).reduced(2, 3));
+    auto topButtons = area.removeFromTop(buttonRowH);
+    layoutTopRow(topButtons);
+    area.removeFromTop(2);
 
-    auto pluginRow = area.removeFromTop(14);
+    if (abOpen)
+    {
+        auto abRow = area.removeFromTop(40);
+        layoutAbRow(abRow);
+        area.removeFromTop(2);
+    }
+
+    auto pluginRow = area.removeFromTop(pluginRowH);
     pluginLabel.setBounds(pluginRow);
+}
+
+void TrackRow::layoutTopRow(juce::Rectangle<int> area)
+{
+    const int buttonW = 50;
+    const int playW = 50;
+    const int stopW = 50;
+    const int timeW = 90;
+    const int removeW = 28;
+    const int gainW = 110;
+    const int panW = 90;
+    const int muteW = 42;
+    const int soloW = 42;
+    const int loopW = 42;
+    const int abW = 36;
+    const int pluginW = 44;
+    const int bypassW = 50;
+    const int editW = 38;
+
+    auto r = area;
+    loadButton.setBounds(r.removeFromLeft(buttonW).reduced(2, 3));
+    r.removeFromLeft(3);
+    playButton.setBounds(r.removeFromLeft(playW).reduced(2, 3));
+    r.removeFromLeft(3);
+    stopButton.setBounds(r.removeFromLeft(stopW).reduced(2, 3));
+    r.removeFromLeft(5);
+    timeLabel.setBounds(r.removeFromLeft(timeW).reduced(2, 3));
+    r.removeFromLeft(5);
+    gainSlider.setBounds(r.removeFromLeft(gainW).reduced(0, 5));
+    r.removeFromLeft(3);
+    panSlider.setBounds(r.removeFromLeft(panW).reduced(0, 5));
+    r.removeFromLeft(3);
+    muteButton.setBounds(r.removeFromLeft(muteW).reduced(2, 3));
+    r.removeFromLeft(2);
+    soloButton.setBounds(r.removeFromLeft(soloW).reduced(2, 3));
+    r.removeFromLeft(2);
+    loopButton.setBounds(r.removeFromLeft(loopW).reduced(2, 3));
+    r.removeFromLeft(2);
+    abButton.setBounds(r.removeFromLeft(abW).reduced(2, 3));
+    r.removeFromLeft(3);
+    loadPluginButton.setBounds(r.removeFromLeft(pluginW).reduced(2, 3));
+    r.removeFromLeft(2);
+    bypassButton.setBounds(r.removeFromLeft(bypassW).reduced(2, 3));
+    r.removeFromLeft(2);
+    editPluginButton.setBounds(r.removeFromLeft(editW).reduced(2, 3));
+    r.removeFromLeft(6);
+    removeButton.setBounds(r.removeFromRight(removeW).reduced(2, 3));
+}
+
+void TrackRow::layoutAbRow(juce::Rectangle<int> area)
+{
+    const int setW = 50;
+    const int valueW = 80;
+    const int sliderH = 16;
+    const int clearW = 50;
+    const int statusW = 160;
+
+    auto r = area;
+    setAButton.setBounds(r.removeFromLeft(setW).reduced(2, 4));
+    r.removeFromLeft(3);
+    auto aBlock = r.removeFromLeft(valueW);
+    startValueLabel.setBounds(aBlock.removeFromTop(14));
+    startSlider.setBounds(aBlock.removeFromTop(sliderH).reduced(0, 0));
+    r.removeFromLeft(8);
+    setBButton.setBounds(r.removeFromLeft(setW).reduced(2, 4));
+    r.removeFromLeft(3);
+    auto bBlock = r.removeFromLeft(valueW);
+    endValueLabel.setBounds(bBlock.removeFromTop(14));
+    endSlider.setBounds(bBlock.removeFromTop(sliderH).reduced(0, 0));
+    r.removeFromLeft(8);
+    clearAbButton.setBounds(r.removeFromLeft(clearW).reduced(2, 4));
+    r.removeFromLeft(8);
+    abStatusLabel.setBounds(r.removeFromLeft(statusW).reduced(0, 4));
+}
+
+void TrackRow::toggleAbPanel()
+{
+    abOpen = abButton.getToggleState();
+    setAButton.setVisible(abOpen);
+    setBButton.setVisible(abOpen);
+    clearAbButton.setVisible(abOpen);
+    startSlider.setVisible(abOpen);
+    endSlider.setVisible(abOpen);
+    startValueLabel.setVisible(abOpen);
+    endValueLabel.setVisible(abOpen);
+    abStatusLabel.setVisible(abOpen);
+
+    if (abOpen)
+    {
+        const int total = track.getSource().getNumSamples();
+        startSlider.setRange(0.0, (double) std::max(1, total), 1.0);
+        endSlider.setRange(0.0, (double) std::max(1, total), 1.0);
+        startSlider.setValue((double) track.getLoopStart(), juce::dontSendNotification);
+        endSlider.setValue((double) track.getLoopEnd(), juce::dontSendNotification);
+    }
+    refreshAbLabels();
+
+    if (auto* p1 = getParentComponent())
+        if (auto* p2 = p1->getParentComponent())
+            if (auto* p3 = p2->getParentComponent())
+                p3->resized();
 }
 
 void TrackRow::openFile()
@@ -171,6 +328,15 @@ void TrackRow::openFile()
             nameLabel.setText(track.getSource().getLoadedFileName(), juce::dontSendNotification);
             updateButtons();
             refreshTimeLabel();
+            if (abOpen)
+            {
+                const int total = track.getSource().getNumSamples();
+                startSlider.setRange(0.0, (double) std::max(1, total), 1.0);
+                endSlider.setRange(0.0, (double) std::max(1, total), 1.0);
+                startSlider.setValue((double) track.getLoopStart(), juce::dontSendNotification);
+                endSlider.setValue((double) track.getLoopEnd(), juce::dontSendNotification);
+                refreshAbLabels();
+            }
         }
     }
 }
@@ -263,4 +429,36 @@ juce::String TrackRow::formatTime(double seconds)
     const int mins = total / 60;
     const int secs = total % 60;
     return juce::String(mins) + ":" + (secs < 10 ? "0" : "") + juce::String(secs);
+}
+
+void TrackRow::refreshAbLabels()
+{
+    if (!abOpen) return;
+
+    const int total = track.getSource().getNumSamples();
+    const double rate = track.getSource().getSampleRate() > 0.0
+        ? track.getSource().getSampleRate() : 44100.0;
+
+    const int a = track.getLoopStart();
+    const int b = track.getLoopEnd();
+
+    startValueLabel.setText("A: " + formatSamples(a, rate), juce::dontSendNotification);
+    endValueLabel.setText("B: " + formatSamples(b, rate), juce::dontSendNotification);
+
+    if (total <= 0)
+        abStatusLabel.setText("(no file loaded)", juce::dontSendNotification);
+    else if (a == 0 && b >= total)
+        abStatusLabel.setText("(full file)", juce::dontSendNotification);
+    else
+        abStatusLabel.setText(juce::String(b - a) + " samples  (" + formatTime((b - a) / rate) + ")",
+                              juce::dontSendNotification);
+}
+
+juce::String TrackRow::formatSamples(int samples, double sampleRate)
+{
+    if (sampleRate <= 0.0) sampleRate = 44100.0;
+    const double seconds = (double) samples / sampleRate;
+    const int mins = (int) seconds / 60;
+    const double secs = seconds - (double) mins * 60;
+    return juce::String(mins) + ":" + juce::String(secs, 2);
 }

@@ -20,11 +20,12 @@
 **Loop button (Option 1 — full-file loop) — Complete.** Per-track **Loop** button (green when active). When ON, `AudioTrackSource::getNextAudioBlock` wraps `playPosition` back to 0 at end of buffer instead of stopping. When OFF, plays once and stops (existing behavior). Window size **960×600** is locked.
 **VST3 insert per track — Complete.** Per-track **VST3** (load), **Bypass** (toggle, amber), **Edit** (open plugin editor window) buttons + plugin name label below the button row. `PluginHost` owns `AudioPluginFormatManager` (VST3 format) + `KnownPluginList`. `AudioTrack` owns `std::unique_ptr<juce::AudioPluginInstance>`; `renderInto` calls `plugin->processBlock(scratchBuffer, emptyMidi)` after the source renders and before gain/pan/sum. Plugin chooser is a modal `DocumentWindow` with a `ListBox` of scanned plugins + Rescan button; double-click loads async via `createPluginInstanceAsync`. Plugin editor opens in its own `DocumentWindow` via `createEditorAndMakeActive()`. `CMakeLists.txt` defines `JUCE_PLUGINHOST_VST3=1`. Also fixed the throwaway-`TrackRow` wart in `refreshLayout` (now uses static `TrackRow::getPreferredHeight()`).
 **Docs — Complete.** `README.md` and `docs/daw-architecture.md` created. Title-bar encoding bug was already fixed in source (plain ASCII `"Simple DAW"`); removed stale TODO.
+**A/B region loop (Option 2) — Complete.** `AudioTrackSource` gains `std::atomic<int> loopStart{0}` / `loopEnd{0}`. Default `loopEnd = numSamples` so the existing full-file loop keeps working when A/B is not set. `getNextAudioBlock` clamps the playhead to `[loopStart, loopEnd)` and wraps to `loopStart` (not 0) when `looping` is on. **A/B** button in `TrackRow` opens a collapsible second row with **Set A** / **Set B** buttons (capture current playhead), two horizontal sliders for fine adjustment, a **Clear** button, and a status label showing region length. `TrackRow` height is dynamic: 76 px collapsed, 126 px with A/B panel open. `MainComponent` wraps `tracksContainer` in a `juce::Viewport` (220 px tall) so a row with the A/B panel open can no longer push the MIDI keyboard off-screen.
 
 ### What's working
 
 - `CMakeLists.txt` — JUCE 8 GUI app, `juce_generate_juce_header`, links `juce_audio_utils`/`juce_audio_devices`/`juce_audio_formats`/`juce_audio_processors`/`juce_dsp`/`juce_gui_extra` (must be explicit for `JuceHeader.h` aggregation). Defines `JUCE_MODAL_LOOPS_PERMITTED=1`, `JUCE_PLUGINHOST_VST3=1`. Uses `file(GLOB_RECURSE ... CONFIGURE_DEPENDS "src/*.cpp")`.
-- `src/Main.cpp` — `MainComponent : juce::AudioAppComponent + MidiInputCallback + Timer`:
+- `src/Main.cpp` — `MainComponent : juce::AudioAppComponent + MidiInputCallback + Timer`. `tracksContainer` is wrapped in a `juce::Viewport` (220 px tall) so a row with the A/B panel open (126 px) can no longer push the MIDI keyboard off-screen.
   - Owns `SynthAudioSource` (synth), `PluginHost pluginHost`, and `std::vector<std::unique_ptr<AudioTrack>> tracks;`
   - On-screen `MidiKeyboardComponent` (5 octaves, C2 to C7) wired to synth's `MidiKeyboardState`
   - `+ Add Track` button creates a new `AudioTrack` + `TrackRow` (passing `pluginHost`); `X` on a row removes it
@@ -34,14 +35,14 @@
   - `prepareToPlay` forwards to `pluginHost.setSampleRate` / `setBlockSize` so async plugin instantiation uses the real device rate
   - `getNextAudioBlock` mixes synth + all audio tracks (mute + gain + pan + plugin insert, with solo logic), then applies smoothed master gain
   - Status label refreshed by `Timer` every 500 ms: device / buffer / rate / MIDI ports / per-track state. `Timer` also calls `refreshTimeLabel()` on every row.
-- `src/audio/AudioTrackSource.{h,cpp}` — `AudioSource` subclass. `playing` and `looping` are `std::atomic<bool>`. `playPosition` is `std::atomic<int>`. New: `getPlayPosition()`, `getSampleRate()`, `setLooping(bool)`, `isLooping()`. When looping and playhead reaches end, wraps to 0.
+- `src/audio/AudioTrackSource.{h,cpp}` — `AudioSource` subclass. `playing`, `looping`, `loopStart`, `loopEnd` are `std::atomic`; `playPosition` is `std::atomic<int>`. `getNextAudioBlock` clamps the playhead to `[loopStart, loopEnd)` and wraps to `loopStart` when `looping` is on. `setLoopStart` / `setLoopEnd` / `clearLoopRegion` for the A/B UI. `loadFile` initialises `loopStart=0`, `loopEnd=numSamples` (full-file fallback when A/B not set).
 - `src/midi/SineVoice.{h,cpp}` — 8-voice polyphonic sine; velocity → amplitude; `MidiMessage::getMidiNoteInHertz` → frequency
 - `src/midi/DemoSound.{h,cpp}` — minimal `juce::SynthesiserSound` subclass
 - `src/midi/SynthAudioSource.{h,cpp}` — owns `juce::Synthesiser` (8 `SineVoice`s + 1 `DemoSound`) and `juce::MidiKeyboardState`
 - `src/plugin/PluginHost.{h,cpp}` — wraps `juce::AudioPluginFormatManager` (VST3 format registered) + `juce::KnownPluginList`. `scanForPlugins()` scans `C:\Program Files\Common Files\VST3` and `%APPDATA%\VST3` via `PluginDirectoryScanner`. `createInstanceAsync(desc, cb)` forwards to `formatManager.createPluginInstanceAsync`. Stores `sampleRate`/`blockSize` set by `MainComponent::prepareToPlay`.
 - `src/plugin/PluginWindows.h` — `PluginChooserDialog` (modal `DocumentWindow` + `ListBoxModel` + `ChangeListener`; lists `KnownPluginList::getTypes()`, double-click loads, Rescan button) and `PluginEditorWindow` (`DocumentWindow` hosting `createEditorAndMakeActive()`, self-deletes on close). Uses `using juce::Component::addAndMakeVisible;` to unhide the reference overload hidden by `ResizableWindow`.
 - `src/tracks/AudioTrack.{h,cpp}` — `class AudioTrack` owning `AudioTrackSource` + scratch buffer + `gain`/`pan`/`mute`/`solo` atomics + `std::unique_ptr<juce::AudioPluginInstance> plugin` + `std::atomic<bool> pluginBypass` + `juce::MidiBuffer pluginMidiBuffer` + `renderInto()`. `setPlugin` calls `prepareToPlay` + `setBusesLayout` (stereo in/out). `renderInto` runs `plugin->processBlock(scratchBuffer, pluginMidiBuffer)` after the source renders, before gain/pan/sum (skipped if bypassed). Solo logic: if any track is soloed, only soloed tracks are audible. Mute always wins.
-- `src/tracks/TrackRow.{h,cpp}` — per-track `Component`, height 76px (static `getPreferredHeight()`). Row 1: name label + plugin label. Row 2 (left → right): Load / Play / Stop / time label / Gain / Pan / Mute / Solo / **Loop** / **VST3** / **Bypass** / **Edit** / X. `TrackRow` now takes `PluginHost&` as a second constructor arg. `openPluginChooser()` opens a `PluginChooserDialog`; the async creation callback calls `track.setPlugin` then `refreshPluginLabel`/`updateButtons` on the message thread. `showPluginEditor()` news a `PluginEditorWindow`. Same `setTextBoxIsEditable(false)` on sliders. Same `TextButton + setClickingTogglesState(true)` on Mute/Solo/Loop/Bypass.
+- `src/tracks/TrackRow.{h,cpp}` — per-track `Component`, height dynamic (76 px collapsed, 126 px with the A/B panel open via `getCurrentPreferredHeight()`). Row 1: name label + plugin label. Row 2 (left → right): Load / Play / Stop / time label / Gain / Pan / Mute / Solo / **Loop** / **A/B** / **VST3** / **Bypass** / **Edit** / X. When A/B is toggled on, an extra row appears with **Set A** / **Set B** / **Clear** buttons, start/end sliders, value labels (`A: 1:23.45` / `B: 2:01.30`), and a region-length status label. `TrackRow` takes `PluginHost&` as a second constructor arg. `openPluginChooser()` opens a `PluginChooserDialog`; the async creation callback calls `track.setPlugin` then `refreshPluginLabel`/`updateButtons` on the message thread. `showPluginEditor()` news a `PluginEditorWindow`. Same `setTextBoxIsEditable(false)` on sliders. Same `TextButton + setClickingTogglesState(true)` on Mute/Solo/Loop/Bypass/A/B.
 - `build-dev.bat` — initializes VsDevCmd, then CMake configure + build
 - `.gitignore` — excludes `build/`, `third_party/`, `.vs/`
 - `docs/learning-plan-juce-dsp.md`, `docs/learning-plan-week-0-2-3.md`
@@ -122,16 +123,30 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 
 ## Next session — pick up here
 
-**VST3 insert — Complete.** Per-track VST3 hosting is wired (Load / Bypass / Edit + plugin name label). `JUCE_PLUGINHOST_VST3=1` is set. Runtime test pending the user having VST3s in `C:\Program Files\Common Files\VST3\` (or `%APPDATA%\VST3\`).
+**A/B region loop (Option 2) — Complete.** Per-track A/B region with collapsible panel. Runtime test pending.
 
-**Recommended next: A/B region loop (Option 2).** Deferred until now per user decision. Needs `std::atomic<int> loopStart`, `loopEnd` on `AudioTrackSource`, plus "Set A at current playhead" / "Set B at current playhead" buttons and two slider fields in `TrackRow`. Layout will need a redesign because the row is already busy (12 controls + plugin row). Consider a second button row or a collapsible "advanced" panel per track.
+**Recommended next: Piano roll / sequencer (Phase 1 — data + engine).** Now that the mixer and inserts are solid, the next big "DAW moment" is note editing. Two phases:
 
-### A/B region loop (Option 2) — plan
+### Piano roll / sequencer
 
-1. In `AudioTrackSource`, add `std::atomic<int> loopStart{0}`, `loopEnd{0}`. Default `loopEnd = numSamples` so the existing full-file Loop keeps working when A/B is not set.
-2. In `getNextAudioBlock`, when `looping` is on and `playPosition >= loopEnd`, wrap to `loopStart` (instead of 0). When `playPosition < loopStart`, jump to `loopStart`.
-3. In `TrackRow`, add "A" and "B" buttons (set from current playhead) + two small number labels / draggable sliders for fine adjustment. Add a "Clear A/B" button.
-4. Visual: draw the A/B region as a coloured bar in the row background (optional stretch).
+**Phase 1 — data + engine:**
+- `MidiNote { int pitch; double startBeat; double lengthBeats; uint8_t velocity; }`
+- `MidiClip { int id; double startBeat; double lengthBeats; std::vector<MidiNote> notes; }`
+- `MidiTrack : juce::AudioSource` — owns a clip, a beat clock, and a synth. In `getNextAudioBlock`, advance the beat clock by `numSamples/sampleRate * bpm/60`, emit `MidiMessage::noteOn` / `noteOff` into a `MidiBuffer`, render the buffer through a `juce::Synthesiser`.
+
+**Phase 2 — UI:**
+- `PianoRollComponent : juce::Component` — left piano keys (click to audition), grid with bars/beats, drag-to-draw notes, drag-to-resize, right-click delete.
+- Snap-to-grid (1/4, 1/8, 1/16, triplet).
+- Playhead that scrolls during playback.
+- Velocity lane at the bottom (optional, stretch).
+
+### Other stretch tasks (pick any)
+- **ASIO audio settings panel** — switch from WASAPI to Komplete Audio ASIO for ~2-3 ms latency.
+- **Master peak meter** — `getMagnitude(channel, 0, numSamples)` repainted from a `Timer`.
+- **JSON save/load** — restore tracks + plugin state on relaunch.
+- **`juce::MidiOutput`** — route on-screen keyboard notes to a selectable MIDI out.
+- **Release build** benchmark.
+- **App icon** via `juce_add_app_icon` or manual `.ico`.
 
 ### Option B — Piano roll / sequencer (deferred)
 
@@ -235,12 +250,12 @@ simple-daw/
 7. ✓ Synth gain slider
 8. ✓ **Mixer polish** (Pan, Solo, Time, Master, Loop)
 9. ✓ **VST3 insert** (Load / Bypass / Edit per track)
-10. **A/B region loop** (next)
+10. ✓ **A/B region loop** (Set A / Set B / Clear / sliders, collapsible panel, Viewport)
 11. Piano roll editor (custom `juce::Component`s)
 12. MIDI playback (sequencer → synth)
 13. Recording (ASIO input → audio track)
 
-**VST3 insert is complete. Next: A/B region loop (Option 2).**
+**A/B region loop is complete. Next: piano roll / sequencer (Phase 1).**
 
 ---
 

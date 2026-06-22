@@ -21,6 +21,14 @@ public:
     void setMute(bool m);
     void setSolo(bool s);
 
+    void setLoopStart(int sample) { source->setLoopStart(sample); }
+    void setLoopEnd(int sample) { source->setLoopEnd(sample); }
+    void clearLoopRegion() { source->clearLoopRegion(); }
+    int getLoopStart() const { return source->getLoopStart(); }
+    int getLoopEnd() const { return source->getLoopEnd(); }
+    void setLoopStartFromPlayhead() { source->setLoopStart(source->getPlayPosition()); }
+    void setLoopEndFromPlayhead() { source->setLoopEnd(source->getPlayPosition()); }
+
     void setPlugin(std::unique_ptr<juce::AudioPluginInstance> p);
     void clearPlugin();
     bool hasPlugin() const { return plugin != nullptr; }

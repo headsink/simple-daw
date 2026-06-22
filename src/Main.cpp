@@ -42,7 +42,9 @@ public:
             });
         };
 
-        addAndMakeVisible(tracksContainer);
+        addAndMakeVisible(tracksViewport);
+        tracksViewport.setViewedComponent(&tracksContainer);
+        tracksViewport.setScrollBarsShown(true, false);
 
         addAndMakeVisible(synthGainLabel);
         synthGainLabel.setText("Synth", juce::dontSendNotification);
@@ -242,21 +244,19 @@ private:
         masterGainSlider.setBounds(topRow.removeFromRight(180));
         area.removeFromTop(6);
 
+        tracksViewport.setBounds(area.removeFromTop(220));
+        area.removeFromTop(8);
+
         if (!trackRows.empty())
         {
-            const int trackHeight = TrackRow::getPreferredHeight();
             int totalHeight = 0;
             for (size_t i = 0; i < trackRows.size(); ++i)
             {
-                trackRows[i]->setBounds(0, totalHeight, area.getWidth(), trackHeight);
-                totalHeight += trackHeight;
+                const int h = trackRows[i]->getCurrentPreferredHeight();
+                trackRows[i]->setBounds(0, totalHeight, tracksViewport.getWidth() - 4, h);
+                totalHeight += h;
             }
-            tracksContainer.setBounds(area.removeFromTop(totalHeight));
-            area.removeFromTop(8);
-        }
-        else
-        {
-            tracksContainer.setBounds(area.removeFromTop(0));
+            tracksContainer.setSize(tracksViewport.getWidth(), std::max(totalHeight, tracksViewport.getHeight()));
         }
 
         midiKeyboard.setBounds(area.removeFromTop(140));
@@ -328,6 +328,7 @@ private:
 
     juce::MidiKeyboardComponent midiKeyboard;
     juce::Component tracksContainer;
+    juce::Viewport tracksViewport;
     juce::TextButton addTrackButton;
     juce::TextButton scanPluginsButton;
     juce::Label statusLabel;

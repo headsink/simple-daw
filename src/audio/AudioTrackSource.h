@@ -17,6 +17,12 @@ public:
     void seekToStart();
     void setLooping(bool shouldLoop);
 
+    void setLoopStart(int sample);
+    void setLoopEnd(int sample);
+    void clearLoopRegion();
+    int getLoopStart() const { return loopStart.load(); }
+    int getLoopEnd() const { return loopEnd.load(); }
+
     bool isLoaded() const;
     bool isPlaying() const;
     bool isLooping() const;
@@ -27,10 +33,15 @@ public:
     double getSampleRate() const { return currentSampleRate; }
 
 private:
+    int clampLoopBound(int sample) const;
+    bool loopRegionIsFullFile() const;
+
     juce::AudioBuffer<float> fileBuffer;
     std::atomic<int> playPosition{0};
     std::atomic<bool> playing{false};
     std::atomic<bool> looping{false};
+    std::atomic<int> loopStart{0};
+    std::atomic<int> loopEnd{0};
     double currentSampleRate = 44100.0;
     juce::String loadedFileName;
 };
