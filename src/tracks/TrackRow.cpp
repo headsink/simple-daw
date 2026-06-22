@@ -1,8 +1,10 @@
 #include "TrackRow.h"
 #include "../plugin/PluginWindows.h"
 
-TrackRow::TrackRow(AudioTrack& t, PluginHost& host, std::function<void(TrackRow*)> removeCb)
-    : track(t), pluginHost(host), onRemove(std::move(removeCb))
+TrackRow::TrackRow(AudioTrack& t, PluginHost& host,
+                   std::function<void(TrackRow*)> removeCb,
+                   std::function<void()> layoutCb)
+    : track(t), pluginHost(host), onRemove(std::move(removeCb)), onLayoutChanged(std::move(layoutCb))
 {
     addAndMakeVisible(nameLabel);
     nameLabel.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -308,10 +310,7 @@ void TrackRow::toggleAbPanel()
     }
     refreshAbLabels();
 
-    if (auto* p1 = getParentComponent())
-        if (auto* p2 = p1->getParentComponent())
-            if (auto* p3 = p2->getParentComponent())
-                p3->resized();
+    if (onLayoutChanged) onLayoutChanged();
 }
 
 void TrackRow::openFile()

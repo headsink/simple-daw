@@ -89,6 +89,9 @@
 - **`AudioFormatManager::registerBasicFormats()`** bundles WAV/AIFF/FLAC/MP3 decoders.
 - **WASAPI buffer size is 480** on the Komplete Audio 1. Switch to Komplete Audio ASIO for ~2-3 ms latency.
 - **Window size is 960×600** — keep this as the default; user confirmed it fits. Do not bump above 600 without checking.
+- **`juce::Viewport` inserts an extra component layer** between the viewed component and the viewport's parent. A child that calls `getParentComponent()->...->resized()` to reach the top-level window will land on the viewport (or its internal view holder), not `MainComponent`. **Use an explicit callback (e.g. `onLayoutChanged`) instead of walking the parent chain** when a child needs to trigger a parent layout. `getTopLevelComponent()->resized()` also fails: it returns the `DocumentWindow`, and `DocumentWindow::resized()` calls `setContentOwned`-equivalent with the *same* bounds, which is a no-op in JUCE — so `MainComponent::resized()` never fires. The only reliable pattern is a direct callback to `MainComponent::refreshLayout()`.
+- **`Component::setBounds` is a no-op when bounds are unchanged.** Do not rely on calling `resized()` on an ancestor to propagate layout; call the layout function directly.
+- **`juce::OwnedArray` owns its elements.** `OwnedArray::clear()` deletes all objects by default. Do NOT manually `delete` elements and then call `clear()` — that is a double-free. Just stop/release the objects, then call `clear()` (or let the destructor handle it).
 
 ---
 
@@ -148,30 +151,6 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 - **Release build** benchmark.
 - **App icon** via `juce_add_app_icon` or manual `.ico`.
 
-### Option B — Piano roll / sequencer (deferred)
-
-**Phase 1 — data + engine:**
-- `MidiNote { int pitch; double startBeat; double lengthBeats; uint8_t velocity; }`
-- `MidiClip { int id; double startBeat; double lengthBeats; std::vector<MidiNote> notes; }`
-- `MidiTrack : juce::AudioSource` — owns a clip, a beat clock, and a synth. In `getNextAudioBlock`, advance the beat clock by `numSamples/sampleRate * bpm/60`, emit `MidiMessage::noteOn` / `noteOff` into a `MidiBuffer`, render the buffer through a `juce::Synthesiser`.
-
-**Phase 2 — UI:**
-- `PianoRollComponent : juce::Component` — left piano keys (click to audition), grid with bars/beats, drag-to-draw notes, drag-to-resize, right-click delete
-- Snap-to-grid (1/4, 1/8, 1/16, triplet)
-- Playhead that scrolls during playback
-- Velocity lane at the bottom (optional, stretch)
-
-### Other stretch tasks (pick any)
-- **Switch to ASIO** (Komplete Audio 1) in the audio settings panel — drops latency from 10 ms to ~2-3 ms
-- **A/B region loop** (after VST3 + piano roll)
-- **Time progress label** done
-- **Master gain** done (with `SmoothedValue`)
-- **Peak meter** on the master output (just `getMagnitude(channel, 0, numSamples)` repainted from a `Timer`)
-- **JSON save/load** so the session restores on relaunch
-- **Add `juce::MidiOutput`** and route note-on/off from the on-screen keyboard to a selectable MIDI out
-- **Release build** benchmark
-- **App icon** via `juce_add_app_icon` or manual `.ico`
-
 ---
 
 ## Architectural decisions made
@@ -186,9 +165,9 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 - **Synth voice style**: custom `juce::SynthesiserVoice` subclass.
 - **MIDI device handling**: open all available `MidiInput` devices on startup; route everything through the same `MidiKeyboardState`.
 - **Mixing architecture**: `std::vector<std::unique_ptr<AudioTrack>>`; each track owns its `AudioTrackSource` and a scratch buffer; `renderInto()` applies mute/solo/gain/pan and sums into the master bus. Synth renders into a separate scratch buffer in `MainComponent` and is added before the audio tracks. Smoothed master gain applied last.
-- **Loop model (v1)**: full-file loop. `AudioTrackSource::looping` atomic bool; if true, wrap `playPosition` to 0 at end of buffer. A/B region loop (Option 2) is deferred until after VST3 + piano roll.
+- **Loop model**: A/B region loop. `AudioTrackSource` has `std::atomic<int> loopStart`, `loopEnd` (default `loopEnd = numSamples`, i.e. full-file fallback). When `looping` is on and `playPosition >= loopEnd`, wraps to `loopStart` (not 0). `TrackRow` exposes **Set A** / **Set B** (capture playhead), two sliders, **Clear**, and a status label on a collapsible second row (76 px collapsed, 126 px expanded). Toggling the row calls `MainComponent::refreshLayout()` via an `onLayoutChanged` callback (see the Viewport quirk above — do not walk the parent chain).
 - **Gain defaults**: tracks 0.25, synth 0.6, master 0.8 (user preference; protects small speakers).
-- **GUI thread ↔ audio thread safety**: every parameter shared between threads is `std::atomic`. `AudioTrackSource::playing`/`looping`/`playPosition`, `AudioTrack::gain`/`pan`/`mute`/`solo`, `MainComponent::synthGain`/`masterGainTarget` are all atomic.
+- **GUI thread ↔ audio thread safety**: every parameter shared between threads is `std::atomic`. `AudioTrackSource::playing`/`looping`/`playPosition`/`loopStart`/`loopEnd`, `AudioTrack::gain`/`pan`/`mute`/`solo`/`pluginBypass`, `MainComponent::synthGain`/`masterGainTarget` are all atomic.
 - **Parameter smoothing**: `juce::SmoothedValue<float>` for the master gain (50 ms ramp, prevents clicks on big volume changes). Per-track gain is *not* smoothed (uses raw atomic read); if zipper noise appears, add `SmoothedValue` per track.
 - **Slider text box policy**: every `juce::Slider` that should only be dragged uses `setTextBoxIsEditable(false)`.
 - **Toggle buttons**: prefer `TextButton` + `setClickingTogglesState(true)` over `ToggleButton`.
@@ -207,9 +186,9 @@ simple-daw/
 ├── .gitignore                  ✓ done
 ├── README.md                   ✓ done
 ├── src/
-│   ├── Main.cpp                ✓ Composes synth + multi-track audio + master gain + VST3 host
+│   ├── Main.cpp                ✓ Composes synth + multi-track audio + master gain + VST3 host + A/B loop viewport
 │   ├── audio/
-│   │   ├── AudioTrackSource.h  ✓ (playing/looping/playPosition atomic, looping wraps at end)
+│   │   ├── AudioTrackSource.h  ✓ (playing/looping/playPosition/loopStart/loopEnd atomic, A/B wrap to loopStart)
 │   │   └── AudioTrackSource.cpp ✓
 │   ├── midi/
 │   │   ├── SineVoice.h         ✓
@@ -219,9 +198,9 @@ simple-daw/
 │   │   ├── SynthAudioSource.h  ✓
 │   │   └── SynthAudioSource.cpp ✓
 │   ├── tracks/
-│   │   ├── AudioTrack.h        ✓ Mixer track (gain/pan/mute/solo + plugin insert + renderInto)
+│   │   ├── AudioTrack.h        ✓ Mixer track (gain/pan/mute/solo + plugin insert + A/B pass-throughs + renderInto)
 │   │   ├── AudioTrack.cpp      ✓
-│   │   ├── TrackRow.h          ✓ Per-track row: name, Load, Play, Stop, time, Gain, Pan, Mute, Solo, Loop, VST3, Bypass, Edit, X + plugin label
+│   │   ├── TrackRow.h          ✓ Per-track row: name, Load, Play, Stop, time, Gain, Pan, Mute, Solo, Loop, A/B, VST3, Bypass, Edit, X + plugin label + collapsible A/B panel
 │   │   └── TrackRow.cpp        ✓
 │   ├── plugin/
 │   │   ├── PluginHost.h        ✓ AudioPluginFormatManager + KnownPluginList wrapper

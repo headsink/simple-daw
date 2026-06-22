@@ -92,6 +92,9 @@ public:
         stopTimer();
         closeAllMidiInputs();
         shutdownAudio();
+
+        trackRows.clear();
+        tracks.clear();
     }
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
@@ -202,7 +205,9 @@ private:
         track->prepareToPlay(2048, 48000.0);
 
         auto* trackPtr = track.get();
-        auto row = std::make_unique<TrackRow>(*trackPtr, pluginHost, [this](TrackRow* r) { removeTrack(r); });
+        auto row = std::make_unique<TrackRow>(*trackPtr, pluginHost,
+            [this](TrackRow* r) { removeTrack(r); },
+            [this] { refreshLayout(); });
 
         tracks.push_back(std::move(track));
         trackRows.push_back(std::move(row));
@@ -286,10 +291,7 @@ private:
     void closeAllMidiInputs()
     {
         for (auto* input : openedInputs)
-        {
             input->stop();
-            delete input;
-        }
         openedInputs.clear();
     }
 

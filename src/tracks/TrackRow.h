@@ -7,7 +7,9 @@
 class TrackRow : public juce::Component
 {
 public:
-    TrackRow(AudioTrack& track, PluginHost& host, std::function<void(TrackRow*)> onRemove);
+    TrackRow(AudioTrack& track, PluginHost& host,
+             std::function<void(TrackRow*)> onRemove,
+             std::function<void()> onLayoutChanged);
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -35,6 +37,7 @@ private:
     AudioTrack& track;
     PluginHost& pluginHost;
     std::function<void(TrackRow*)> onRemove;
+    std::function<void()> onLayoutChanged;
 
     juce::Label nameLabel;
     juce::TextButton loadButton {"Load"};
