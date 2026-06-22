@@ -25,6 +25,6 @@ public:
 private:
     juce::AudioBuffer<float> fileBuffer;
     int playPosition = 0;
-    bool playing = false;
+    std::atomic<bool> playing{false};
     juce::String loadedFileName;
 };

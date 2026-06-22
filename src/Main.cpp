@@ -1,6 +1,7 @@
 #include <JuceHeader.h>
 #include "midi/SynthAudioSource.h"
-#include "audio/AudioTrackSource.h"
+#include "tracks/AudioTrack.h"
+#include "tracks/TrackRow.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -10,7 +11,7 @@ public:
     MainComponent()
         : midiKeyboard(synthSource.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
     {
-        setSize(900, 460);
+        setSize(960, 600);
 
         addAndMakeVisible(midiKeyboard);
         midiKeyboard.setKeyWidth(28.0f);
@@ -20,30 +21,37 @@ public:
         midiKeyboard.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour(0xff404040));
         midiKeyboard.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x805080ff));
 
-        addAndMakeVisible(loadButton);
-        loadButton.setButtonText("Load WAV");
-        loadButton.onClick = [this] { openWavChooser(); };
-
-        addAndMakeVisible(playButton);
-        playButton.setButtonText("Play");
-        playButton.onClick = [this] { audioTrack.togglePlay(); updateTransportButtons(); };
-
-        addAndMakeVisible(stopButton);
-        stopButton.setButtonText("Stop");
-        stopButton.onClick = [this] { audioTrack.stop(); updateTransportButtons(); };
-
         addAndMakeVisible(statusLabel);
         statusLabel.setJustificationType(juce::Justification::centredLeft);
         statusLabel.setColour(juce::Label::textColourId, juce::Colours::white);
 
-        addAndMakeVisible(trackLabel);
-        trackLabel.setJustificationType(juce::Justification::centredLeft);
-        trackLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
-        trackLabel.setText("Track: (no file loaded)", juce::dontSendNotification);
+        addAndMakeVisible(addTrackButton);
+        addTrackButton.setButtonText("+ Add Track");
+        addTrackButton.onClick = [this] { addTrack(); };
+
+        addAndMakeVisible(tracksContainer);
+
+        addAndMakeVisible(synthGainLabel);
+        synthGainLabel.setText("Synth", juce::dontSendNotification);
+        synthGainLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+        synthGainLabel.setJustificationType(juce::Justification::centredRight);
+
+        addAndMakeVisible(synthGainSlider);
+        synthGainSlider.setRange(0.0, 2.0, 0.01);
+        synthGainSlider.setValue(0.6);
+        synthGainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+        synthGainSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+        synthGainSlider.setTextBoxIsEditable(false);
+        synthGainSlider.onValueChange = [this]
+        {
+            synthGain.store((float)synthGainSlider.getValue());
+        };
 
         setAudioChannels(0, 2);
         openAllMidiInputs();
-        updateTransportButtons();
+
+        addTrack();
+        refreshLayout();
 
         startTimer(500);
     }
@@ -58,7 +66,8 @@ public:
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
     {
         synthSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
-        audioTrack.prepareToPlay(samplesPerBlockExpected, sampleRate);
+        for (auto& t : tracks)
+            t->prepareToPlay(samplesPerBlockExpected, sampleRate);
 
         juce::String deviceName = "none";
         int bufferSize = 0;
@@ -74,34 +83,34 @@ public:
 
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override
     {
-        juce::AudioBuffer<float> scratchBuffer(bufferToFill.buffer->getNumChannels(),
-                                               bufferToFill.numSamples);
-        juce::AudioSourceChannelInfo scratch(&scratchBuffer, 0, bufferToFill.numSamples);
+        bool anyTrackSoloed = false;
+        for (auto& t : tracks)
+            if (t->isSolo()) { anyTrackSoloed = true; break; }
 
+        scratchBuffer.setSize(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
         scratchBuffer.clear();
-        synthSource.getNextAudioBlock(scratch);
-        const float synthGain = 0.6f;
 
-        juce::AudioBuffer<float> trackBuffer(bufferToFill.buffer->getNumChannels(),
-                                             bufferToFill.numSamples);
-        juce::AudioSourceChannelInfo trackInfo(&trackBuffer, 0, bufferToFill.numSamples);
-        audioTrack.getNextAudioBlock(trackInfo);
-        const float trackGain = 1.0f;
+        juce::AudioSourceChannelInfo scratch(&scratchBuffer, 0, bufferToFill.numSamples);
+        synthSource.getNextAudioBlock(scratch);
+        const float g = synthGain.load();
+        for (int ch = 0; ch < scratchBuffer.getNumChannels(); ++ch)
+            scratchBuffer.applyGain(ch, 0, bufferToFill.numSamples, g);
 
         bufferToFill.buffer->clear();
         for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch)
-        {
             bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, scratchBuffer,
-                                         ch, 0, bufferToFill.numSamples, synthGain);
-            bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, trackBuffer,
-                                         ch, 0, bufferToFill.numSamples, trackGain);
-        }
+                                         ch, 0, bufferToFill.numSamples);
+
+        for (auto& t : tracks)
+            t->renderInto(*bufferToFill.buffer, bufferToFill.startSample,
+                          bufferToFill.numSamples, anyTrackSoloed);
     }
 
     void releaseResources() override
     {
         synthSource.releaseResources();
-        audioTrack.releaseResources();
+        for (auto& t : tracks)
+            t->releaseResources();
     }
 
     void paint(juce::Graphics& g) override
@@ -109,30 +118,13 @@ public:
         g.fillAll(juce::Colour(0xff1a1a1a));
         g.setColour(juce::Colours::white);
         g.setFont(juce::FontOptions(20.0f));
-        g.drawText("Simple DAW — audio track + MIDI synth", getLocalBounds().removeFromTop(40),
+        g.drawText("Simple DAW", getLocalBounds().removeFromTop(40),
                    juce::Justification::centred);
     }
 
     void resized() override
     {
-        auto area = getLocalBounds().reduced(20);
-        area.removeFromTop(40);
-
-        statusLabel.setBounds(area.removeFromTop(24));
-        area.removeFromTop(8);
-
-        trackLabel.setBounds(area.removeFromTop(20));
-        area.removeFromTop(6);
-
-        auto buttonRow = area.removeFromTop(36);
-        loadButton.setBounds(buttonRow.removeFromLeft(120).reduced(2));
-        buttonRow.removeFromLeft(8);
-        playButton.setBounds(buttonRow.removeFromLeft(80).reduced(2));
-        buttonRow.removeFromLeft(4);
-        stopButton.setBounds(buttonRow.removeFromLeft(80).reduced(2));
-        area.removeFromTop(8);
-
-        midiKeyboard.setBounds(area.removeFromTop(180));
+        refreshLayout();
     }
 
     void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message) override
@@ -156,37 +148,73 @@ public:
             actualSampleRate = device->getCurrentSampleRate();
         }
         updateStatus(deviceName, bufferSize, actualSampleRate);
-        updateTransportButtons();
     }
 
 private:
-    void openWavChooser()
+    void addTrack()
     {
-        juce::Logger::writeToLog("Load WAV button clicked");
-        auto logFile = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
-            .getChildFile("simple-daw-click.log");
-        logFile.appendText("Load WAV button clicked\n");
+        auto track = std::make_unique<AudioTrack>();
+        track->prepareToPlay(2048, 48000.0);
 
-        juce::FileChooser chooser("Select a WAV file to play",
-                                  juce::File::getSpecialLocation(juce::File::userMusicDirectory),
-                                  "*.wav;*.aif;*.aiff;*.flac;*.mp3");
-        if (chooser.browseForFileToOpen())
+        auto* trackPtr = track.get();
+        auto row = std::make_unique<TrackRow>(*trackPtr, [this](TrackRow* r) { removeTrack(r); });
+
+        tracks.push_back(std::move(track));
+        trackRows.push_back(std::move(row));
+        tracksContainer.addAndMakeVisible(trackRows.back().get());
+        refreshLayout();
+    }
+
+    void removeTrack(TrackRow* row)
+    {
+        for (size_t i = 0; i < trackRows.size(); ++i)
         {
-            logFile.appendText("FileChooser returned a file\n");
-            auto file = chooser.getResult();
-            logFile.appendText("Result file: " + file.getFullPathName() + "\n");
-            if (file.existsAsFile())
+            if (trackRows[i].get() == row)
             {
-                audioTrack.loadFile(file);
-                trackLabel.setText("Track: " + audioTrack.getLoadedFileName(),
-                                   juce::dontSendNotification);
-                updateTransportButtons();
+                tracksContainer.removeChildComponent(row);
+                trackRows.erase(trackRows.begin() + i);
+                tracks.erase(tracks.begin() + i);
+                refreshLayout();
+                return;
             }
+        }
+    }
+
+    void refreshLayout()
+    {
+        auto area = getLocalBounds().reduced(12);
+        area.removeFromTop(40);
+        area.removeFromTop(8);
+
+        statusLabel.setBounds(area.removeFromTop(20));
+        area.removeFromTop(6);
+
+        addTrackButton.setBounds(area.removeFromTop(28).removeFromRight(120));
+        area.removeFromTop(6);
+
+        if (!trackRows.empty())
+        {
+            const int trackHeight = TrackRow(trackRows.front()->getTrack(), nullptr).getPreferredHeight();
+            int totalHeight = 0;
+            for (size_t i = 0; i < trackRows.size(); ++i)
+            {
+                trackRows[i]->setBounds(0, totalHeight, area.getWidth(), trackHeight);
+                totalHeight += trackHeight;
+            }
+            tracksContainer.setBounds(area.removeFromTop(totalHeight));
+            area.removeFromTop(8);
         }
         else
         {
-            logFile.appendText("FileChooser cancelled\n");
+            tracksContainer.setBounds(area.removeFromTop(0));
         }
+
+        midiKeyboard.setBounds(area.removeFromTop(140));
+
+        auto synthRow = area.removeFromTop(28);
+        synthGainLabel.setBounds(synthRow.removeFromLeft(50));
+        synthRow.removeFromLeft(8);
+        synthGainSlider.setBounds(synthRow);
     }
 
     void openAllMidiInputs()
@@ -226,32 +254,36 @@ private:
                 names.add(in->getName());
             midiList = names.joinIntoString(", ");
         }
+        juce::String trackStates;
+        for (size_t i = 0; i < tracks.size(); ++i)
+        {
+            if (i > 0) trackStates += "  ";
+            const char* state = ".";
+            if (tracks[i]->isMuted()) state = "M";
+            else if (tracks[i]->getSource().isPlaying()) state = "P";
+            trackStates += "T" + juce::String(i + 1) + ":" + state;
+        }
         statusLabel.setText("Device: " + deviceName
             + "  |  Buffer: " + juce::String(bufferSize)
             + "  |  Rate: " + juce::String(actualSampleRate, 1) + " Hz"
-            + "  |  MIDI (" + juce::String(midiCount) + "): " + midiList,
+            + "  |  MIDI (" + juce::String(midiCount) + "): " + midiList
+            + "  |  " + trackStates,
             juce::dontSendNotification);
     }
 
-    void updateTransportButtons()
-    {
-        const bool loaded = audioTrack.isLoaded();
-        loadButton.setEnabled(true);
-        playButton.setEnabled(loaded);
-        stopButton.setEnabled(loaded);
-        playButton.setButtonText(audioTrack.isPlaying() ? "Pause" : "Play");
-    }
-
     SynthAudioSource synthSource;
-    AudioTrackSource audioTrack;
+    std::vector<std::unique_ptr<AudioTrack>> tracks;
+    std::vector<std::unique_ptr<TrackRow>> trackRows;
 
     juce::MidiKeyboardComponent midiKeyboard;
-    juce::TextButton loadButton;
-    juce::TextButton playButton;
-    juce::TextButton stopButton;
+    juce::Component tracksContainer;
+    juce::TextButton addTrackButton;
     juce::Label statusLabel;
-    juce::Label trackLabel;
+    juce::Label synthGainLabel;
+    juce::Slider synthGainSlider;
     juce::OwnedArray<juce::MidiInput> openedInputs;
+    juce::AudioBuffer<float> scratchBuffer;
+    std::atomic<float> synthGain{0.6f};
 };
 
 class SimpleDawApplication : public juce::JUCEApplication
