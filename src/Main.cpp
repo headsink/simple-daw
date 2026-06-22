@@ -368,6 +368,10 @@ private:
         bpmSlider.setBounds(seqRow.removeFromLeft(120).reduced(0, 5));
         seqRow.removeFromLeft(8);
         seqBeatLabel.setBounds(seqRow.removeFromLeft(140).reduced(2, 4));
+        seqRow.removeFromLeft(10);
+        midiGainLabel.setBounds(seqRow.removeFromLeft(36));
+        seqRow.removeFromLeft(4);
+        midiGainSlider.setBounds(seqRow.removeFromLeft(140).reduced(0, 5));
         area.removeFromTop(6);
 
         tracksViewport.setBounds(area.removeFromTop(180));
@@ -390,11 +394,7 @@ private:
         auto synthRow = area.removeFromTop(28);
         synthGainLabel.setBounds(synthRow.removeFromLeft(50));
         synthRow.removeFromLeft(8);
-        synthGainSlider.setBounds(synthRow.removeFromLeft(180));
-        synthRow.removeFromLeft(12);
-        midiGainLabel.setBounds(synthRow.removeFromLeft(40));
-        synthRow.removeFromLeft(4);
-        midiGainSlider.setBounds(synthRow);
+        synthGainSlider.setBounds(synthRow);
     }
 
     void openAllMidiInputs()
