@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "midi/SynthAudioSource.h"
+#include "midi/MidiTrack.h"
 #include "tracks/AudioTrack.h"
 #include "tracks/TrackRow.h"
 #include "plugin/PluginHost.h"
@@ -46,6 +47,53 @@ public:
         tracksViewport.setViewedComponent(&tracksContainer);
         tracksViewport.setScrollBarsShown(true, false);
 
+        addAndMakeVisible(seqPlayButton);
+        seqPlayButton.setButtonText("Seq Play");
+        seqPlayButton.onClick = [this]
+        {
+            midiTrack.play();
+            updateSeqButtons();
+        };
+
+        addAndMakeVisible(seqStopButton);
+        seqStopButton.setButtonText("Seq Stop");
+        seqStopButton.onClick = [this]
+        {
+            midiTrack.stop();
+            updateSeqButtons();
+        };
+
+        addAndMakeVisible(bpmLabel);
+        bpmLabel.setText("BPM", juce::dontSendNotification);
+        bpmLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+        bpmLabel.setJustificationType(juce::Justification::centredRight);
+
+        addAndMakeVisible(bpmSlider);
+        bpmSlider.setRange(40.0, 240.0, 0.5);
+        bpmSlider.setValue(120.0);
+        bpmSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+        bpmSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+        bpmSlider.setTextBoxIsEditable(false);
+        bpmSlider.onValueChange = [this]
+        {
+            midiTrack.setBpm(bpmSlider.getValue());
+        };
+
+        addAndMakeVisible(seqLoopButton);
+        seqLoopButton.setButtonText("Loop");
+        seqLoopButton.setClickingTogglesState(true);
+        seqLoopButton.setToggleState(true, juce::dontSendNotification);
+        seqLoopButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff308030));
+        seqLoopButton.onClick = [this]
+        {
+            midiTrack.setLooping(seqLoopButton.getToggleState());
+        };
+
+        addAndMakeVisible(seqBeatLabel);
+        seqBeatLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
+        seqBeatLabel.setJustificationType(juce::Justification::centredLeft);
+        seqBeatLabel.setText("beat: 0.0 / 8.0", juce::dontSendNotification);
+
         addAndMakeVisible(synthGainLabel);
         synthGainLabel.setText("Synth", juce::dontSendNotification);
         synthGainLabel.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -60,6 +108,22 @@ public:
         synthGainSlider.onValueChange = [this]
         {
             synthGain.store((float)synthGainSlider.getValue());
+        };
+
+        addAndMakeVisible(midiGainLabel);
+        midiGainLabel.setText("Seq", juce::dontSendNotification);
+        midiGainLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+        midiGainLabel.setJustificationType(juce::Justification::centredRight);
+
+        addAndMakeVisible(midiGainSlider);
+        midiGainSlider.setRange(0.0, 2.0, 0.01);
+        midiGainSlider.setValue(0.5);
+        midiGainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+        midiGainSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+        midiGainSlider.setTextBoxIsEditable(false);
+        midiGainSlider.onValueChange = [this]
+        {
+            midiGain.store((float)midiGainSlider.getValue());
         };
 
         setAudioChannels(0, 2);
@@ -83,6 +147,7 @@ public:
 
         addTrack();
         refreshLayout();
+        updateSeqButtons();
 
         startTimer(500);
     }
@@ -100,6 +165,7 @@ public:
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
     {
         synthSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+        midiTrack.prepareToPlay(samplesPerBlockExpected, sampleRate);
         for (auto& t : tracks)
             t->prepareToPlay(samplesPerBlockExpected, sampleRate);
 
@@ -141,6 +207,14 @@ public:
             bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, scratchBuffer,
                                          ch, 0, bufferToFill.numSamples);
 
+        midiTrackScratch.setSize(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
+        juce::AudioSourceChannelInfo midiScratch(&midiTrackScratch, 0, bufferToFill.numSamples);
+        midiTrack.getNextAudioBlock(midiScratch);
+        const float mg = midiGain.load();
+        for (int ch = 0; ch < midiTrackScratch.getNumChannels(); ++ch)
+            bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, midiTrackScratch,
+                                         ch, 0, bufferToFill.numSamples, mg);
+
         for (auto& t : tracks)
             t->renderInto(*bufferToFill.buffer, bufferToFill.startSample,
                           bufferToFill.numSamples, anyTrackSoloed);
@@ -154,6 +228,7 @@ public:
     void releaseResources() override
     {
         synthSource.releaseResources();
+        midiTrack.releaseResources();
         for (auto& t : tracks)
             t->releaseResources();
     }
@@ -196,6 +271,12 @@ public:
 
         for (auto& row : trackRows)
             row->refreshTimeLabel();
+
+        updateSeqButtons();
+        seqBeatLabel.setText(
+            "beat: " + juce::String(midiTrack.getCurrentBeat(), 1) + " / "
+            + juce::String(midiTrack.getClipLengthBeats(), 1),
+            juce::dontSendNotification);
     }
 
 private:
@@ -230,6 +311,12 @@ private:
         }
     }
 
+    void updateSeqButtons()
+    {
+        seqPlayButton.setEnabled(! midiTrack.isPlaying());
+        seqStopButton.setEnabled(midiTrack.isPlaying());
+    }
+
     void refreshLayout()
     {
         auto area = getLocalBounds().reduced(12);
@@ -249,7 +336,21 @@ private:
         masterGainSlider.setBounds(topRow.removeFromRight(180));
         area.removeFromTop(6);
 
-        tracksViewport.setBounds(area.removeFromTop(220));
+        auto seqRow = area.removeFromTop(28);
+        seqPlayButton.setBounds(seqRow.removeFromLeft(70).reduced(2, 3));
+        seqRow.removeFromLeft(4);
+        seqStopButton.setBounds(seqRow.removeFromLeft(70).reduced(2, 3));
+        seqRow.removeFromLeft(4);
+        seqLoopButton.setBounds(seqRow.removeFromLeft(50).reduced(2, 3));
+        seqRow.removeFromLeft(8);
+        bpmLabel.setBounds(seqRow.removeFromLeft(40));
+        seqRow.removeFromLeft(4);
+        bpmSlider.setBounds(seqRow.removeFromLeft(120).reduced(0, 5));
+        seqRow.removeFromLeft(8);
+        seqBeatLabel.setBounds(seqRow.removeFromLeft(140).reduced(2, 4));
+        area.removeFromTop(6);
+
+        tracksViewport.setBounds(area.removeFromTop(180));
         area.removeFromTop(8);
 
         if (!trackRows.empty())
@@ -269,7 +370,11 @@ private:
         auto synthRow = area.removeFromTop(28);
         synthGainLabel.setBounds(synthRow.removeFromLeft(50));
         synthRow.removeFromLeft(8);
-        synthGainSlider.setBounds(synthRow);
+        synthGainSlider.setBounds(synthRow.removeFromLeft(180));
+        synthRow.removeFromLeft(12);
+        midiGainLabel.setBounds(synthRow.removeFromLeft(40));
+        synthRow.removeFromLeft(4);
+        midiGainSlider.setBounds(synthRow);
     }
 
     void openAllMidiInputs()
@@ -324,6 +429,7 @@ private:
     }
 
     SynthAudioSource synthSource;
+    MidiTrack midiTrack;
     PluginHost pluginHost;
     std::vector<std::unique_ptr<AudioTrack>> tracks;
     std::vector<std::unique_ptr<TrackRow>> trackRows;
@@ -333,14 +439,24 @@ private:
     juce::Viewport tracksViewport;
     juce::TextButton addTrackButton;
     juce::TextButton scanPluginsButton;
+    juce::TextButton seqPlayButton;
+    juce::TextButton seqStopButton;
+    juce::TextButton seqLoopButton;
+    juce::Label bpmLabel;
+    juce::Slider bpmSlider;
+    juce::Label seqBeatLabel;
     juce::Label statusLabel;
     juce::Label synthGainLabel;
     juce::Slider synthGainSlider;
+    juce::Label midiGainLabel;
+    juce::Slider midiGainSlider;
     juce::Label masterGainLabel;
     juce::Slider masterGainSlider;
     juce::OwnedArray<juce::MidiInput> openedInputs;
     juce::AudioBuffer<float> scratchBuffer;
+    juce::AudioBuffer<float> midiTrackScratch;
     std::atomic<float> synthGain{0.6f};
+    std::atomic<float> midiGain{0.5f};
     std::atomic<float> masterGainTarget{0.8f};
     juce::SmoothedValue<float> masterGainSmoothed{0.8f};
 };
