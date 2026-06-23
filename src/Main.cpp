@@ -6,6 +6,7 @@
 #include "plugin/PluginHost.h"
 #include "ui/PianoRollComponent.h"
 #include "ui/PeakMeterComponent.h"
+#include "ui/SettingsWindow.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -44,6 +45,21 @@ public:
                 pluginHost.scanForPlugins();
                 scanPluginsButton.setEnabled(true);
             });
+        };
+
+        addAndMakeVisible(settingsButton);
+        settingsButton.setButtonText("Settings");
+        settingsButton.onClick = [this]
+        {
+            if (settingsWindow == nullptr)
+            {
+                settingsWindow = new SettingsWindow(deviceManager,
+                    [this] { settingsWindow = nullptr; });
+            }
+            else
+            {
+                settingsWindow->toFront(true);
+            }
         };
 
         addAndMakeVisible(tracksViewport);
@@ -183,6 +199,7 @@ public:
         shutdownAudio();
 
         if (pianoRollWindow) { delete pianoRollWindow; pianoRollWindow = nullptr; }
+        if (settingsWindow) { delete settingsWindow; settingsWindow = nullptr; }
 
         trackRows.clear();
         tracks.clear();
@@ -364,6 +381,8 @@ private:
         addTrackButton.setBounds(topRow.removeFromRight(110));
         topRow.removeFromRight(8);
         scanPluginsButton.setBounds(topRow.removeFromRight(90));
+        topRow.removeFromRight(8);
+        settingsButton.setBounds(topRow.removeFromRight(80));
         topRow.removeFromRight(16);
         masterGainLabel.setBounds(topRow.removeFromRight(60));
         topRow.removeFromRight(4);
@@ -479,6 +498,7 @@ private:
     juce::Viewport tracksViewport;
     juce::TextButton addTrackButton;
     juce::TextButton scanPluginsButton;
+    juce::TextButton settingsButton;
     juce::TextButton seqPlayButton;
     juce::TextButton seqStopButton;
     juce::TextButton seqLoopButton;
@@ -487,6 +507,7 @@ private:
     juce::Slider bpmSlider;
     juce::Label seqBeatLabel;
     PianoRollWindow* pianoRollWindow = nullptr;
+    SettingsWindow* settingsWindow = nullptr;
     juce::Label statusLabel;
     juce::Label synthGainLabel;
     juce::Slider synthGainSlider;
