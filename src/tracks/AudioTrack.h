@@ -53,6 +53,8 @@ public:
     bool isMuted() const { return mute.load(); }
     bool isSolo() const { return solo.load(); }
 
+    std::atomic<float>& getPeakRef() { return peak; }
+
 private:
     std::unique_ptr<AudioTrackSource> source;
     juce::AudioBuffer<float> scratchBuffer;
@@ -62,6 +64,7 @@ private:
     std::atomic<float> pan{0.0f};
     std::atomic<bool> mute{false};
     std::atomic<bool> solo{false};
+    std::atomic<float> peak{0.0f};
 
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     std::atomic<bool> pluginBypass{false};

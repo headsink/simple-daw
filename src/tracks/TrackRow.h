@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include "AudioTrack.h"
 #include "../plugin/PluginHost.h"
+#include "../ui/TrackMeterComponent.h"
 
 class PluginEditorWindow;
 
@@ -48,6 +49,7 @@ private:
     juce::TextButton playButton {"Play"};
     juce::TextButton stopButton {"Stop"};
     juce::Label timeLabel;
+    TrackMeterComponent trackMeter;
     juce::Slider gainSlider;
     juce::Slider panSlider;
     juce::TextButton muteButton {"Mute"};

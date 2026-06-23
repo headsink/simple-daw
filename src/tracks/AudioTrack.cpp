@@ -104,16 +104,33 @@ void AudioTrack::renderInto(juce::AudioBuffer<float>& dest, int startSample, int
     const float g = gain.load();
     const float p = pan.load();
     const int destChans = dest.getNumChannels();
+    const int srcChans = scratchBuffer.getNumChannels();
+
+    if (g != 1.0f)
+    {
+        for (int ch = 0; ch < srcChans; ++ch)
+            scratchBuffer.applyGain(ch, 0, numSamples, g);
+    }
+
+    float blockPeak = 0.0f;
+    for (int ch = 0; ch < srcChans; ++ch)
+    {
+        const float mag = scratchBuffer.getMagnitude(ch, 0, numSamples);
+        if (mag > blockPeak) blockPeak = mag;
+    }
+    const float currentPeak = peak.load();
+    if (blockPeak > currentPeak)
+        peak.store(blockPeak);
 
     for (int ch = 0; ch < destChans; ++ch)
     {
-        const int srcCh = ch % scratchBuffer.getNumChannels();
+        const int srcCh = ch % srcChans;
         float panGain = 1.0f;
         if (destChans == 2)
         {
             if (ch == 0) panGain = (p <= 0.0f) ? 1.0f : (1.0f - p);
             else         panGain = (p >= 0.0f) ? 1.0f : (1.0f + p);
         }
-        dest.addFrom(ch, startSample, scratchBuffer, srcCh, 0, numSamples, g * panGain);
+        dest.addFrom(ch, startSample, scratchBuffer, srcCh, 0, numSamples, panGain);
     }
 }

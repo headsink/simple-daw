@@ -14,7 +14,9 @@ TrackRow::~TrackRow()
 TrackRow::TrackRow(AudioTrack& t, PluginHost& host,
                    std::function<void(TrackRow*)> removeCb,
                    std::function<void()> layoutCb)
-    : track(t), pluginHost(host), onRemove(std::move(removeCb)), onLayoutChanged(std::move(layoutCb))
+    : track(t), pluginHost(host), onRemove(std::move(removeCb)),
+      onLayoutChanged(std::move(layoutCb)),
+      trackMeter(t.getPeakRef())
 {
     addAndMakeVisible(nameLabel);
     nameLabel.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -42,6 +44,8 @@ TrackRow::TrackRow(AudioTrack& t, PluginHost& host,
     timeLabel.setColour(juce::Label::textColourId, juce::Colours::lightgrey);
     timeLabel.setJustificationType(juce::Justification::centred);
     timeLabel.setText("0:00 / 0:00", juce::dontSendNotification);
+
+    addAndMakeVisible(trackMeter);
 
     addAndMakeVisible(gainSlider);
     gainSlider.setRange(0.0, 2.0, 0.01);
@@ -230,10 +234,11 @@ void TrackRow::layoutTopRow(juce::Rectangle<int> area)
     const int buttonW = 50;
     const int playW = 50;
     const int stopW = 50;
-    const int timeW = 90;
+    const int timeW = 80;
+    const int meterW = 50;
     const int removeW = 28;
     const int gainW = 110;
-    const int panW = 90;
+    const int panW = 86;
     const int muteW = 42;
     const int soloW = 42;
     const int loopW = 42;
@@ -248,8 +253,10 @@ void TrackRow::layoutTopRow(juce::Rectangle<int> area)
     playButton.setBounds(r.removeFromLeft(playW).reduced(2, 3));
     r.removeFromLeft(3);
     stopButton.setBounds(r.removeFromLeft(stopW).reduced(2, 3));
-    r.removeFromLeft(5);
+    r.removeFromLeft(4);
     timeLabel.setBounds(r.removeFromLeft(timeW).reduced(2, 3));
+    r.removeFromLeft(4);
+    trackMeter.setBounds(r.removeFromLeft(meterW).reduced(2, 8));
     r.removeFromLeft(5);
     gainSlider.setBounds(r.removeFromLeft(gainW).reduced(0, 5));
     r.removeFromLeft(3);
