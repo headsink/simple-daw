@@ -401,20 +401,28 @@ private:
 
     void removeTrack(TrackRow* row)
     {
-        for (size_t i = 0; i < trackRows.size(); ++i)
-        {
-            if (trackRows[i].get() == row)
+        // Defer the actual destruction: removeTrack is invoked from inside the
+        // TrackRow's own removeButton.onClick lambda, so deleting the TrackRow
+        // synchronously here would destroy the Button mid-callback and corrupt
+        // the heap (trips _CrtIsValidHeapPointer). Detach from the parent now
+        // (safe — just unparents), then destroy on the message thread.
+        tracksContainer.removeChildComponent(row);
+
+        juce::MessageManager::getInstance()->callAsync(
+            [this, row]
             {
-                tracksContainer.removeChildComponent(row);
+                for (size_t i = 0; i < trackRows.size(); ++i)
                 {
-                    const juce::SpinLock::ScopedLockType sl(tracksLock);
-                    trackRows.erase(trackRows.begin() + i);
-                    tracks.erase(tracks.begin() + i);
+                    if (trackRows[i].get() == row)
+                    {
+                        const juce::SpinLock::ScopedLockType sl(tracksLock);
+                        trackRows.erase(trackRows.begin() + i);
+                        tracks.erase(tracks.begin() + i);
+                        break;
+                    }
                 }
                 refreshLayout();
-                return;
-            }
-        }
+            });
     }
 
     void updateSeqButtons()
