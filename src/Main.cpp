@@ -1,6 +1,7 @@
 #include <JuceHeader.h>
 #include "midi/SynthAudioSource.h"
 #include "midi/MidiTrack.h"
+#include "midi/MidiOutputRouter.h"
 #include "tracks/AudioTrack.h"
 #include "tracks/TrackRow.h"
 #include "plugin/PluginHost.h"
@@ -13,6 +14,7 @@ class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
                       public juce::Timer
 {
+    static inline const juce::String noneOutputEntry { "(none)" };
 public:
     MainComponent()
         : midiKeyboard(synthSource.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard),
@@ -76,6 +78,24 @@ public:
         recordButton.setClickingTogglesState(true);
         recordButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffaa3030));
         recordButton.onClick = [this] { toggleRecording(); };
+
+        addAndMakeVisible(midiOutputLabel);
+        midiOutputLabel.setText("MIDI Out", juce::dontSendNotification);
+        midiOutputLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+        midiOutputLabel.setJustificationType(juce::Justification::centredRight);
+
+        addAndMakeVisible(midiOutputCombo);
+        midiOutputCombo.setTooltip("Route on-screen keyboard and sequencer notes to a hardware/software MIDI output");
+        midiOutputCombo.onChange = [this]
+        {
+            const auto name = midiOutputCombo.getText();
+            midiOutputRouter.sendAllNotesOff();
+            if (name == noneOutputEntry || name.isEmpty())
+                midiOutputRouter.closeOutput();
+            else
+                midiOutputRouter.openOutput(name);
+        };
+        refreshMidiOutputCombo();
 
         addAndMakeVisible(tracksViewport);
         tracksViewport.setViewedComponent(&tracksContainer);
@@ -211,6 +231,8 @@ public:
     {
         stopTimer();
         closeAllMidiInputs();
+        midiOutputRouter.sendAllNotesOff();
+        midiOutputRouter.closeOutput();
         shutdownAudio();
 
         if (pianoRollWindow) { delete pianoRollWindow; pianoRollWindow = nullptr; }
@@ -272,6 +294,7 @@ public:
 
         juce::AudioSourceChannelInfo scratch(&scratchBuffer, 0, bufferToFill.numSamples);
         synthSource.getNextAudioBlock(scratch);
+        midiOutputRouter.sendBuffer(synthSource.getLastMidiBuffer(), 0);
         const float g = synthGain.load();
         for (int ch = 0; ch < scratchBuffer.getNumChannels(); ++ch)
             scratchBuffer.applyGain(ch, 0, bufferToFill.numSamples, g);
@@ -287,6 +310,7 @@ public:
         midiTrackScratch.clear();
         juce::AudioSourceChannelInfo midiScratch(&midiTrackScratch, 0, bufferToFill.numSamples);
         midiTrack.getNextAudioBlock(midiScratch);
+        midiOutputRouter.sendBuffer(midiTrack.getLastMidiBuffer(), 0);
         const float mg = midiGain.load();
         for (int ch = 0; ch < midiTrackScratch.getNumChannels(); ++ch)
             bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, midiTrackScratch,
@@ -447,6 +471,7 @@ private:
         obj->setProperty("synthGain", (double) synthGain.load());
         obj->setProperty("midiGain", (double) midiGain.load());
         obj->setProperty("bpm", midiTrack.getBpm());
+        obj->setProperty("midiOutput", midiOutputRouter.isOpen() ? midiOutputRouter.getCurrentName() : juce::String());
 
         auto* clipObj = new juce::DynamicObject();
         clipObj->setProperty("lengthBeats", midiTrack.getClip().getLengthBeats());
@@ -519,6 +544,22 @@ private:
 
         midiTrack.setBpm((double) json["bpm"]);
         bpmSlider.setValue((double) json["bpm"], juce::dontSendNotification);
+
+        {
+            const juce::String savedOut = json["midiOutput"].toString();
+            refreshMidiOutputCombo();
+            if (savedOut.isNotEmpty() && savedOut != noneOutputEntry)
+            {
+                if (midiOutputRouter.openOutput(savedOut))
+                    midiOutputCombo.setText(savedOut, juce::dontSendNotification);
+                else
+                    midiOutputCombo.setText(noneOutputEntry, juce::dontSendNotification);
+            }
+            else
+            {
+                midiOutputCombo.setText(noneOutputEntry, juce::dontSendNotification);
+            }
+        }
 
         auto* clipObj = json["midiClip"].getDynamicObject();
         if (clipObj != nullptr)
@@ -669,6 +710,10 @@ private:
         loadButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
         topRow.removeFromLeft(4);
         recordButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
+        topRow.removeFromLeft(8);
+        midiOutputLabel.setBounds(topRow.removeFromLeft(56));
+        topRow.removeFromLeft(4);
+        midiOutputCombo.setBounds(topRow.removeFromLeft(160).reduced(0, 4));
         area.removeFromTop(6);
 
         auto seqRow = area.removeFromTop(28);
@@ -712,6 +757,17 @@ private:
         synthGainLabel.setBounds(synthRow.removeFromLeft(50));
         synthRow.removeFromLeft(8);
         synthGainSlider.setBounds(synthRow);
+    }
+
+    void refreshMidiOutputCombo()
+    {
+        midiOutputCombo.clear();
+        const auto names = midiOutputRouter.getAvailableOutputNames();
+        midiOutputCombo.addItem(noneOutputEntry, 1);
+        for (int i = 0; i < names.size(); ++i)
+            midiOutputCombo.addItem(names[i], i + 2);
+        midiOutputCombo.setText(midiOutputRouter.isOpen() ? midiOutputRouter.getCurrentName() : noneOutputEntry,
+                                juce::dontSendNotification);
     }
 
     void openAllMidiInputs()
@@ -768,6 +824,7 @@ private:
     SynthAudioSource synthSource;
     MidiTrack midiTrack;
     Recorder recorder;
+    MidiOutputRouter midiOutputRouter;
     juce::SpinLock tracksLock;
     PluginHost pluginHost;
     std::vector<std::unique_ptr<AudioTrack>> tracks;
@@ -782,6 +839,8 @@ private:
     juce::TextButton saveButton;
     juce::TextButton loadButton;
     juce::TextButton recordButton;
+    juce::Label midiOutputLabel;
+    juce::ComboBox midiOutputCombo;
     juce::TextButton seqPlayButton;
     juce::TextButton seqStopButton;
     juce::TextButton seqLoopButton;

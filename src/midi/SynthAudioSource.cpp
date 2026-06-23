@@ -19,7 +19,7 @@ void SynthAudioSource::releaseResources() {}
 void SynthAudioSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
 {
     info.buffer->clear();
-    juce::MidiBuffer midi;
-    keyboardState.processNextMidiBuffer(midi, info.startSample, info.numSamples, true);
-    synth.renderNextBlock(*info.buffer, midi, info.startSample, info.numSamples);
+    lastMidiBuffer.clear();
+    keyboardState.processNextMidiBuffer(lastMidiBuffer, info.startSample, info.numSamples, true);
+    synth.renderNextBlock(*info.buffer, lastMidiBuffer, info.startSample, info.numSamples);
 }

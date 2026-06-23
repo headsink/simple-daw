@@ -101,6 +101,7 @@ void MidiTrack::killAllHeldNotes(juce::MidiBuffer& midi)
 void MidiTrack::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
 {
     info.buffer->clear();
+    lastMidiBuffer.clear();
 
     if (shouldResetHeldNotes.exchange(false))
         heldNotes.clear();
@@ -135,6 +136,7 @@ void MidiTrack::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
         emitNoteOns(midi, beatStart, clipLen, remainingSamples);
 
         synth.renderNextBlock(*info.buffer, midi, info.startSample, remainingSamples);
+        lastMidiBuffer.addEvents(midi, info.startSample, remainingSamples, info.startSample);
 
         midi.clear();
         killAllHeldNotes(midi);
@@ -148,6 +150,7 @@ void MidiTrack::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
 
         synth.renderNextBlock(*info.buffer, midi,
                               info.startSample + remainingSamples, wrapSamples);
+        lastMidiBuffer.addEvents(midi, info.startSample + remainingSamples, wrapSamples, info.startSample);
 
         currentBeat.store(wrapBeatEnd);
     }
@@ -157,6 +160,7 @@ void MidiTrack::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
         emitNoteOns(midi, beatStart, beatEnd, numSamples);
 
         synth.renderNextBlock(*info.buffer, midi, info.startSample, numSamples);
+        lastMidiBuffer.addEvents(midi, info.startSample, numSamples, info.startSample);
 
         if (beatEnd >= clipLen)
         {

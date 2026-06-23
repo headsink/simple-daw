@@ -15,6 +15,11 @@ public:
 
     juce::MidiKeyboardState keyboardState;
 
+    // MIDI events generated from the keyboard state during the last block.
+    // Read by MainComponent to forward to external MIDI outputs.
+    const juce::MidiBuffer& getLastMidiBuffer() const { return lastMidiBuffer; }
+
 private:
     juce::Synthesiser synth;
+    juce::MidiBuffer lastMidiBuffer;
 };

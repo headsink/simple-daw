@@ -27,7 +27,8 @@
 **Recording — Complete.** `src/audio/Recorder.{h,cpp}` — `AudioIODeviceCallback` registered as a second callback on the device manager (alongside `AudioAppComponent`). On `audioDeviceIOCallbackWithContext` it copies the input channels into a growing `AudioBuffer<float>` protected by a `CriticalSection`. **Rec** button in the top row (red when active) starts/stops. On stop, writes the buffer to a timestamped WAV in `%USERPROFILE%\Documents\Simple DAW Recordings\` (auto-created) via `WavAudioFormat` and creates a new `AudioTrack` that loads it. `prepareToPlay` adds the callback, `releaseResources` removes it. Runtime test pending (requires an input-capable device like Komplete Audio 1).
 **Master peak meter — Complete.** `src/ui/PeakMeterComponent.h` — custom `Component + Timer` (30 fps) that reads `std::atomic<float>&` master peak via `exchange(0.0f)` (atomic read+reset), applies exponential decay (`max(p, displayed * 0.88f)`), and paints a log-scale bar (-60 dB to 0 dB, green < -24 dB, yellow < -12 dB, red >= -12 dB). Audio thread in `MainComponent::getNextAudioBlock` computes `getMagnitude` per channel after the master gain is applied and stores the max. Meter is placed in the top row to the left of the Master gain slider.
 **ASIO audio settings panel — Complete.** `Settings` button in the top row opens a `SettingsWindow : juce::DocumentWindow` (500×400, resizable) containing a `juce::AudioDeviceSelectorComponent` wired to the existing `deviceManager`. User can switch from WASAPI to ASIO (Komplete Audio), change buffer size, and sample rate. Changes apply immediately. `MainComponent` tracks the window via raw pointer + `onClosed` callback (deletes in destructor).
-**JSON save/load — Complete.** **Save** and **Load** buttons in the top row. Save serialises the full session to a `.sdaw` JSON file (master/synth/midi gains, BPM, MIDI clip notes, audio tracks with file path + gain/pan/mute/solo/loop/A/B region). Load restores everything, re-loading audio files from their saved paths (skips tracks whose file is missing). Uses `juce::DynamicObject` + `juce::JSON::writeToStream` / `juce::JSON::parse`. `AudioTrackSource` gained a `loadedFilePath` field + `getFilePath()`. `TrackRow` gained `setNameText()` for restoring the name label after load. Plugin state (parameter values) is not saved — plugins must be re-added manually after load.
+**JSON save/load — Complete.** **Save** and **Load** buttons in the top row. Save serialises the full session to a `.sdaw` JSON file (master/synth/midi gains, BPM, MIDI clip notes, audio tracks with file path + gain/pan/mute/solo/loop/A/B region, MIDI output device name). Load restores everything, re-loading audio files from their saved paths (skips tracks whose file is missing). Uses `juce::DynamicObject` + `juce::JSON::writeToStream` / `juce::JSON::parse`. `AudioTrackSource` gained a `loadedFilePath` field + `getFilePath()`. `TrackRow` gained `setNameText()` for restoring the name label after load. Plugin state (parameter values) is not saved — plugins must be re-added manually after load.
+**MIDI output routing — Complete.** `src/midi/MidiOutputRouter.h` — owns a `juce::MidiOutput` (opened via `openDevice` + `startBackgroundThread`). `MidiOutputRouter::sendBuffer` forwards a `juce::MidiBuffer` to the device via `sendMessageNow` (safe from the audio thread). `SynthAudioSource` and `MidiTrack` now expose `getLastMidiBuffer()` so `MainComponent::getNextAudioBlock` can forward the keyboard-state MIDI and the sequencer MIDI to the router right after each source renders. A `juce::ComboBox` ("MIDI Out") in the top row lists available outputs (refreshed by `refreshMidiOutputCombo()`); selecting `(none)` closes the output, selecting a device name opens it. Switching devices sends all-notes-off on all 16 channels first. Selected output name is persisted in the `.sdaw` session file under `midiOutput`. `~MainComponent` sends all-notes-off + closes the output before `shutdownAudio`.
 
 ### What's working
 
@@ -38,6 +39,7 @@
   - `+ Add Track` button creates a new `AudioTrack` + `TrackRow` (passing `pluginHost`); `X` on a row removes it
   - `Scan VST3` button triggers `pluginHost.scanForPlugins()` off the message thread
   - `Master` label + `masterGainSlider` (0-2, default 0.8, `SmoothedValue` ramp 50 ms) at the top right
+  - `MIDI Out` combo box in the top row routes on-screen keyboard + sequencer notes to a selectable `juce::MidiOutput` via `MidiOutputRouter` (persisted in `.sdaw`)
   - `Synth` label + `synthGainSlider` (0-2, default 0.6) at the bottom
   - `prepareToPlay` forwards to `pluginHost.setSampleRate` / `setBlockSize` so async plugin instantiation uses the real device rate
   - `getNextAudioBlock` mixes synth + all audio tracks (mute + gain + pan + plugin insert, with solo logic), then applies smoothed master gain
@@ -45,8 +47,9 @@
 - `src/audio/AudioTrackSource.{h,cpp}` — `AudioSource` subclass. `playing`, `looping`, `loopStart`, `loopEnd` are `std::atomic`; `playPosition` is `std::atomic<int>`. `getNextAudioBlock` clamps the playhead to `[loopStart, loopEnd)` and wraps to `loopStart` when `looping` is on. `setLoopStart` / `setLoopEnd` / `clearLoopRegion` for the A/B UI. `loadFile` initialises `loopStart=0`, `loopEnd=numSamples` (full-file fallback when A/B not set).
 - `src/midi/SineVoice.{h,cpp}` — 8-voice polyphonic sine; velocity → amplitude; `MidiMessage::getMidiNoteInHertz` → frequency
 - `src/midi/DemoSound.{h,cpp}` — minimal `juce::SynthesiserSound` subclass
-- `src/midi/SynthAudioSource.{h,cpp}` — owns `juce::Synthesiser` (8 `SineVoice`s + 1 `DemoSound`) and `juce::MidiKeyboardState`
-- `src/midi/MidiTrack.{h,cpp}` — `MidiTrack : juce::AudioSource`. Owns a `MidiClip` + `juce::Synthesiser` (8 `SineVoice`s + 1 `DemoSound`) + beat clock. `getNextAudioBlock` advances `currentBeat` by `numSamples/sampleRate * bpm/60`, emits sample-accurate `noteOn`/`noteOff` into a `MidiBuffer`, renders through the synth. Tracks `heldNotes` (pitch + endBeat) for note-offs that happen in later blocks. Loop wrapping splits the block at the wrap point, kills held notes, re-emits from beat 0. `playing`/`looping`/`bpm`/`currentBeat` are atomic. `loadDemoMelody()` pre-populates a C major scale (8 notes, 1 beat each, 0.9 length, velocity 80).
+- `src/midi/SynthAudioSource.{h,cpp}` — owns `juce::Synthesiser` (8 `SineVoice`s + 1 `DemoSound`) and `juce::MidiKeyboardState`. Exposes `getLastMidiBuffer()` for MIDI output routing.
+- `src/midi/MidiTrack.{h,cpp}` — `MidiTrack : juce::AudioSource`. Owns a `MidiClip` + `juce::Synthesiser` (8 `SineVoice`s + 1 `DemoSound`) + beat clock. `getNextAudioBlock` advances `currentBeat` by `numSamples/sampleRate * bpm/60`, emits sample-accurate `noteOn`/`noteOff` into a `MidiBuffer`, renders through the synth. Tracks `heldNotes` (pitch + endBeat) for note-offs that happen in later blocks. Loop wrapping splits the block at the wrap point, kills held notes, re-emits from beat 0. `playing`/`looping`/`bpm`/`currentBeat` are atomic. `loadDemoMelody()` pre-populates a C major scale (8 notes, 1 beat each, 0.9 length, velocity 80). Exposes `getLastMidiBuffer()` for MIDI output routing.
+- `src/midi/MidiOutputRouter.h` — owns a `juce::MidiOutput` (opened via `openDevice` + `startBackgroundThread`). `sendBuffer` forwards a `juce::MidiBuffer` to the device via `sendMessageNow` (safe from the audio thread). `sendAllNotesOff` sends all-notes-off on all 16 channels (used on device switch + shutdown).
 - `src/plugin/PluginHost.{h,cpp}` — wraps `juce::AudioPluginFormatManager` (VST3 format registered) + `juce::KnownPluginList`. `scanForPlugins()` scans `C:\Program Files\Common Files\VST3` and `%APPDATA%\VST3` via `PluginDirectoryScanner`. `createInstanceAsync(desc, cb)` forwards to `formatManager.createPluginInstanceAsync`. Stores `sampleRate`/`blockSize` set by `MainComponent::prepareToPlay`.
 - `src/plugin/PluginWindows.h` — `PluginChooserDialog` (modal `DocumentWindow` + `ListBoxModel` + `ChangeListener`; lists `KnownPluginList::getTypes()`, double-click loads, Rescan button) and `PluginEditorWindow` (`DocumentWindow` hosting `createEditorAndMakeActive()`, self-deletes on close). Uses `using juce::Component::addAndMakeVisible;` to unhide the reference overload hidden by `ResizableWindow`.
 - `src/tracks/AudioTrack.{h,cpp}` — `class AudioTrack` owning `AudioTrackSource` + scratch buffer + `gain`/`pan`/`mute`/`solo` atomics + `std::unique_ptr<juce::AudioPluginInstance> plugin` + `std::atomic<bool> pluginBypass` + `juce::MidiBuffer pluginMidiBuffer` + `renderInto()`. `setPlugin` calls `prepareToPlay` + `setBusesLayout` (stereo in/out). `renderInto` runs `plugin->processBlock(scratchBuffer, pluginMidiBuffer)` after the source renders, before gain/pan/sum (skipped if bypassed). Solo logic: if any track is soloed, only soloed tracks are audible. Mute always wins.
@@ -152,20 +155,20 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 ## Next session — pick up here
 
 **Recording — Complete.** Rec button captures input device audio, writes WAV, creates new track. Runtime test pending (requires input-capable device).
+**MIDI output routing — Complete.** On-screen keyboard + sequencer notes routed to a selectable `juce::MidiOutput` via `MidiOutputRouter`. Selection persisted in `.sdaw`.
 
-**Recommended next: pick a stretch task.** The core DAW is now functional: multi-track audio mixer with VST3 inserts, A/B looping, MIDI sequencer with piano roll editor (velocity lane + zoom + scroll), master peak meter, ASIO settings panel, JSON save/load, recording. The remaining items are polish and I/O:
+**Recommended next: pick a stretch task.** The core DAW is now functional: multi-track audio mixer with VST3 inserts, A/B looping, MIDI sequencer with piano roll editor (velocity lane + zoom + scroll), master peak meter, ASIO settings panel, JSON save/load, recording, MIDI output routing. The remaining items are polish:
 
 ### Stretch tasks (pick any)
-- **`juce::MidiOutput`** — route on-screen keyboard notes to a selectable MIDI out.
 - **Piano roll copy/paste** and **undo/redo**.
 - **Release build** benchmark.
 - **App icon** via `juce_add_app_icon` or manual `.ico`.
 
 ### Other stretch tasks (pick any)
-- **ASIO audio settings panel** — switch from WASAPI to Komplete Audio ASIO for ~2-3 ms latency.
-- **Master peak meter** — `getMagnitude(channel, 0, numSamples)` repainted from a `Timer`.
-- **JSON save/load** — restore tracks + plugin state on relaunch.
-- **`juce::MidiOutput`** — route on-screen keyboard notes to a selectable MIDI out.
+- **ASIO audio settings panel** — switch from WASAPI to Komplete Audio ASIO for ~2-3 ms latency. (done — listed for reference)
+- **Master peak meter** — `getMagnitude(channel, 0, numSamples)` repainted from a `Timer`. (done — listed for reference)
+- **JSON save/load** — restore tracks + plugin state on relaunch. (done — listed for reference)
+- **`juce::MidiOutput`** — route on-screen keyboard notes to a selectable MIDI out. (done — listed for reference)
 - **Release build** benchmark.
 - **App icon** via `juce_add_app_icon` or manual `.ico`.
 
@@ -221,7 +224,8 @@ simple-daw/
 │   │   ├── MidiClip.h          ✓ Phase 1 data (vector<MidiNote> + loadDemoMelody + CriticalSection lock)
 │   │   ├── MidiClip.cpp        ✓
 │   │   ├── MidiTrack.h         ✓ Phase 1 engine (AudioSource + beat clock + synth + note scheduling)
-│   │   └── MidiTrack.cpp       ✓
+│   │   ├── MidiTrack.cpp       ✓
+│   │   └── MidiOutputRouter.h  ✓ Owns juce::MidiOutput, forwards MidiBuffer via sendMessageNow
 │   ├── tracks/
 │   │   ├── AudioTrack.h        ✓ Mixer track (gain/pan/mute/solo + plugin insert + A/B pass-throughs + renderInto)
 │   │   ├── AudioTrack.cpp      ✓
@@ -267,8 +271,9 @@ simple-daw/
 16. ✓ **JSON save/load** (save/load buttons, `.sdaw` JSON format, restore gains/BPM/clip/tracks)
 17. ✓ **Piano roll improvements** (velocity lane + zoom + scroll + Clear All)
 18. ✓ **Recording** (ASIO input → audio track)
+19. ✓ **MIDI output routing** (MidiOutputRouter + combo box, persisted in `.sdaw`)
 
-**Recording is complete. Next: pick a stretch task.**
+**MIDI output routing is complete. Next: pick a stretch task.**
 
 ---
 
