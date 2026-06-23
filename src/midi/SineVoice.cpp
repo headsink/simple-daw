@@ -1,8 +1,9 @@
 #include "SineVoice.h"
+#include "DemoSound.h"
 
 bool SineVoice::canPlaySound(juce::SynthesiserSound* sound)
 {
-    return dynamic_cast<juce::SynthesiserSound*>(sound) != nullptr;
+    return dynamic_cast<DemoSound*>(sound) != nullptr;
 }
 
 void SineVoice::startNote(int midiNoteNumber, float velocity, juce::SynthesiserSound*, int)

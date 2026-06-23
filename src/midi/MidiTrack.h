@@ -2,6 +2,7 @@
 
 #include <JuceHeader.h>
 #include "MidiClip.h"
+#include "MidiNote.h"
 #include "SineVoice.h"
 #include "DemoSound.h"
 
@@ -47,6 +48,7 @@ private:
     std::atomic<bool> looping{true};
     std::atomic<double> bpm{120.0};
     std::atomic<double> currentBeat{0.0};
+    std::atomic<bool> shouldResetHeldNotes{false};
 
     double sampleRate = 44100.0;
 
@@ -56,4 +58,5 @@ private:
         double endBeat;
     };
     std::vector<HeldNote> heldNotes;
+    std::vector<MidiNote> notesSnapshot;
 };

@@ -9,6 +9,8 @@ void AudioTrackSource::releaseResources() {}
 
 void AudioTrackSource::loadFile(const juce::File& file)
 {
+    const juce::SpinLock::ScopedLockType sl(bufferLock);
+
     juce::AudioFormatManager mgr;
     mgr.registerBasicFormats();
 
@@ -56,15 +58,14 @@ int AudioTrackSource::clampLoopBound(int sample) const
     return sample;
 }
 
-bool AudioTrackSource::loopRegionIsFullFile() const
-{
-    const int total = fileBuffer.getNumSamples();
-    return total > 0 && loopStart.load() == 0 && loopEnd.load() >= total;
-}
-
 void AudioTrackSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
 {
     info.buffer->clear();
+
+    const juce::SpinLock::ScopedTryLockType sl(bufferLock);
+    if (! sl.isLocked())
+        return;
+
     if (!playing.load() || fileBuffer.getNumSamples() == 0)
         return;
 
@@ -100,7 +101,6 @@ void AudioTrackSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& inf
     if (looping.load() && newPos >= b)
         newPos = a;
     playPosition.store(newPos);
-    (void) loopRegionIsFullFile();
 }
 
 bool AudioTrackSource::isLoaded() const { return fileBuffer.getNumSamples() > 0; }

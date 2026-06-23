@@ -18,7 +18,7 @@ void MidiClip::clearNotes() { notes.clear(); }
 void MidiClip::loadDemoMelody()
 {
     notes.clear();
-    lengthBeats = 8.0;
+    lengthBeats.store(8.0);
 
     const int scale[] = { 60, 62, 64, 65, 67, 69, 71, 72 };
     for (int i = 0; i < 8; ++i)

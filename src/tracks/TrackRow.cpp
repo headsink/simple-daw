@@ -1,6 +1,16 @@
 #include "TrackRow.h"
 #include "../plugin/PluginWindows.h"
 
+TrackRow::~TrackRow()
+{
+    *alive = false;
+    if (editorWindow != nullptr)
+    {
+        delete editorWindow;
+        editorWindow = nullptr;
+    }
+}
+
 TrackRow::TrackRow(AudioTrack& t, PluginHost& host,
                    std::function<void(TrackRow*)> removeCb,
                    std::function<void()> layoutCb)
@@ -342,17 +352,24 @@ void TrackRow::openFile()
 
 void TrackRow::openPluginChooser()
 {
+    auto aliveFlag = alive;
     auto* dlg = new PluginChooserDialog(pluginHost,
-        [this](const juce::PluginDescription& desc)
+        [this, aliveFlag](const juce::PluginDescription& desc)
         {
             pluginHost.createInstanceAsync(desc,
-                [this](std::unique_ptr<juce::AudioPluginInstance> inst, const juce::String& err)
+                [this, aliveFlag](std::unique_ptr<juce::AudioPluginInstance> inst, const juce::String& err)
                 {
+                    if (! *aliveFlag) return;
                     if (inst)
                     {
+                        if (editorWindow != nullptr) { delete editorWindow; editorWindow = nullptr; }
                         track.setPlugin(std::move(inst));
                         juce::MessageManager::getInstance()->callAsync(
-                            [this] { refreshPluginLabel(); updateButtons(); });
+                            [this, aliveFlag] {
+                                if (! *aliveFlag) return;
+                                refreshPluginLabel();
+                                updateButtons();
+                            });
                     }
                     else
                     {
@@ -370,7 +387,14 @@ void TrackRow::showPluginEditor()
 {
     auto* p = track.getPlugin();
     if (p == nullptr) return;
-    new PluginEditorWindow(*p);
+    if (editorWindow != nullptr)
+    {
+        editorWindow->toFront(true);
+        return;
+    }
+    auto aliveFlag = alive;
+    editorWindow = PluginEditorWindow::open(*p,
+        [this, aliveFlag]() { if (*aliveFlag) editorWindow = nullptr; });
 }
 
 void TrackRow::updateButtons()

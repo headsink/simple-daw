@@ -216,8 +216,11 @@ public:
         if (pianoRollWindow) { delete pianoRollWindow; pianoRollWindow = nullptr; }
         if (settingsWindow) { delete settingsWindow; settingsWindow = nullptr; }
 
-        trackRows.clear();
-        tracks.clear();
+        {
+            const juce::SpinLock::ScopedLockType sl(tracksLock);
+            trackRows.clear();
+            tracks.clear();
+        }
     }
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
@@ -229,6 +232,9 @@ public:
 
         pluginHost.setSampleRate(sampleRate);
         pluginHost.setBlockSize(samplesPerBlockExpected);
+
+        scratchBuffer.setSize(2, samplesPerBlockExpected);
+        midiTrackScratch.setSize(2, samplesPerBlockExpected);
 
         deviceManager.addAudioCallback(&recorder);
 
@@ -250,10 +256,18 @@ public:
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override
     {
         bool anyTrackSoloed = false;
-        for (auto& t : tracks)
-            if (t->isSolo()) { anyTrackSoloed = true; break; }
+        {
+            const juce::SpinLock::ScopedTryLockType sl(tracksLock);
+            if (sl.isLocked())
+            {
+                for (auto& t : tracks)
+                    if (t->isSolo()) { anyTrackSoloed = true; break; }
+            }
+        }
 
-        scratchBuffer.setSize(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
+        if (scratchBuffer.getNumChannels() < bufferToFill.buffer->getNumChannels()
+            || scratchBuffer.getNumSamples() < bufferToFill.numSamples)
+            scratchBuffer.setSize(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
         scratchBuffer.clear();
 
         juce::AudioSourceChannelInfo scratch(&scratchBuffer, 0, bufferToFill.numSamples);
@@ -267,7 +281,10 @@ public:
             bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, scratchBuffer,
                                          ch, 0, bufferToFill.numSamples);
 
-        midiTrackScratch.setSize(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
+        if (midiTrackScratch.getNumChannels() < bufferToFill.buffer->getNumChannels()
+            || midiTrackScratch.getNumSamples() < bufferToFill.numSamples)
+            midiTrackScratch.setSize(bufferToFill.buffer->getNumChannels(), bufferToFill.numSamples);
+        midiTrackScratch.clear();
         juce::AudioSourceChannelInfo midiScratch(&midiTrackScratch, 0, bufferToFill.numSamples);
         midiTrack.getNextAudioBlock(midiScratch);
         const float mg = midiGain.load();
@@ -275,9 +292,15 @@ public:
             bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, midiTrackScratch,
                                          ch, 0, bufferToFill.numSamples, mg);
 
-        for (auto& t : tracks)
-            t->renderInto(*bufferToFill.buffer, bufferToFill.startSample,
-                          bufferToFill.numSamples, anyTrackSoloed);
+        {
+            const juce::SpinLock::ScopedTryLockType sl(tracksLock);
+            if (sl.isLocked())
+            {
+                for (auto& t : tracks)
+                    t->renderInto(*bufferToFill.buffer, bufferToFill.startSample,
+                                  bufferToFill.numSamples, anyTrackSoloed);
+            }
+        }
 
         masterGainSmoothed.setTargetValue(masterGainTarget.load());
         const float master = masterGainSmoothed.getNextValue();
@@ -351,16 +374,27 @@ public:
 private:
     void addTrack()
     {
+        double sr = 48000.0;
+        int bs = 512;
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+        {
+            sr = device->getCurrentSampleRate();
+            bs = device->getCurrentBufferSizeSamples();
+        }
+
         auto track = std::make_unique<AudioTrack>();
-        track->prepareToPlay(2048, 48000.0);
+        track->prepareToPlay(bs, sr);
 
         auto* trackPtr = track.get();
         auto row = std::make_unique<TrackRow>(*trackPtr, pluginHost,
             [this](TrackRow* r) { removeTrack(r); },
             [this] { refreshLayout(); });
 
-        tracks.push_back(std::move(track));
-        trackRows.push_back(std::move(row));
+        {
+            const juce::SpinLock::ScopedLockType sl(tracksLock);
+            tracks.push_back(std::move(track));
+            trackRows.push_back(std::move(row));
+        }
         tracksContainer.addAndMakeVisible(trackRows.back().get());
         refreshLayout();
     }
@@ -372,8 +406,11 @@ private:
             if (trackRows[i].get() == row)
             {
                 tracksContainer.removeChildComponent(row);
-                trackRows.erase(trackRows.begin() + i);
-                tracks.erase(tracks.begin() + i);
+                {
+                    const juce::SpinLock::ScopedLockType sl(tracksLock);
+                    trackRows.erase(trackRows.begin() + i);
+                    tracks.erase(tracks.begin() + i);
+                }
                 refreshLayout();
                 return;
             }
@@ -498,8 +535,11 @@ private:
             }
         }
 
-        trackRows.clear();
-        tracks.clear();
+        {
+            const juce::SpinLock::ScopedLockType sl(tracksLock);
+            trackRows.clear();
+            tracks.clear();
+        }
 
         double sr = 48000.0;
         int bs = 512;
@@ -537,8 +577,11 @@ private:
                     [this] { refreshLayout(); });
                 row->setNameText(track->getSource().getLoadedFileName());
 
-                tracks.push_back(std::move(track));
-                trackRows.push_back(std::move(row));
+                {
+                    const juce::SpinLock::ScopedLockType sl(tracksLock);
+                    tracks.push_back(std::move(track));
+                    trackRows.push_back(std::move(row));
+                }
                 tracksContainer.addAndMakeVisible(trackRows.back().get());
             }
         }
@@ -576,8 +619,11 @@ private:
                 [this] { refreshLayout(); });
             row->setNameText(track->getSource().getLoadedFileName());
 
-            tracks.push_back(std::move(track));
-            trackRows.push_back(std::move(row));
+            {
+                const juce::SpinLock::ScopedLockType sl(tracksLock);
+                tracks.push_back(std::move(track));
+                trackRows.push_back(std::move(row));
+            }
             tracksContainer.addAndMakeVisible(trackRows.back().get());
             refreshLayout();
         }
@@ -714,6 +760,7 @@ private:
     SynthAudioSource synthSource;
     MidiTrack midiTrack;
     Recorder recorder;
+    juce::SpinLock tracksLock;
     PluginHost pluginHost;
     std::vector<std::unique_ptr<AudioTrack>> tracks;
     std::vector<std::unique_ptr<TrackRow>> trackRows;

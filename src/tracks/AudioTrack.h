@@ -60,6 +60,7 @@ private:
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     std::atomic<bool> pluginBypass{false};
     juce::MidiBuffer pluginMidiBuffer;
+    juce::SpinLock pluginLock;
     double currentSampleRate = 48000.0;
     int currentBlockSize = 512;
 };

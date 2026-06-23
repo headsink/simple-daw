@@ -35,7 +35,6 @@ public:
 
 private:
     int clampLoopBound(int sample) const;
-    bool loopRegionIsFullFile() const;
 
     juce::AudioBuffer<float> fileBuffer;
     std::atomic<int> playPosition{0};
@@ -46,4 +45,5 @@ private:
     double currentSampleRate = 44100.0;
     juce::String loadedFileName;
     juce::String loadedFilePath;
+    juce::SpinLock bufferLock;
 };

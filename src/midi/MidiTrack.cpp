@@ -13,11 +13,12 @@ void MidiTrack::prepareToPlay(int, double sr)
 {
     sampleRate = sr > 0.0 ? sr : 44100.0;
     synth.setCurrentPlaybackSampleRate(sampleRate);
+    notesSnapshot.reserve(128);
 }
 
 void MidiTrack::releaseResources()
 {
-    heldNotes.clear();
+    shouldResetHeldNotes.store(true);
 }
 
 void MidiTrack::play()
@@ -25,7 +26,7 @@ void MidiTrack::play()
     if (! playing.load())
     {
         currentBeat.store(0.0);
-        heldNotes.clear();
+        shouldResetHeldNotes.store(true);
         playing.store(true);
     }
 }
@@ -34,7 +35,7 @@ void MidiTrack::stop()
 {
     playing.store(false);
     currentBeat.store(0.0);
-    heldNotes.clear();
+    shouldResetHeldNotes.store(true);
 }
 
 void MidiTrack::setPlaying(bool shouldPlay)
@@ -76,10 +77,7 @@ void MidiTrack::emitPendingNoteOffs(juce::MidiBuffer& midi, double beatRangeStar
 void MidiTrack::emitNoteOns(juce::MidiBuffer& midi, double beatRangeStart,
                             double beatRangeEnd, int numSamples)
 {
-    const juce::ScopedTryLock sl(clip.lock);
-    if (! sl.isLocked()) return;
-
-    for (const auto& note : clip.getNotes())
+    for (const auto& note : notesSnapshot)
     {
         if (note.startBeat >= beatRangeStart && note.startBeat < beatRangeEnd)
         {
@@ -104,6 +102,9 @@ void MidiTrack::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
 {
     info.buffer->clear();
 
+    if (shouldResetHeldNotes.exchange(false))
+        heldNotes.clear();
+
     if (! playing.load())
         return;
 
@@ -112,6 +113,12 @@ void MidiTrack::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
     const double beatsPerSecond = bpm.load() / 60.0;
     const double beatsPerSample = beatsPerSecond / sr;
     const double deltaBeats = beatsPerSample * (double) numSamples;
+
+    {
+        const juce::ScopedTryLock sl(clip.lock);
+        if (sl.isLocked())
+            notesSnapshot = clip.getNotes();
+    }
 
     const double beatStart = currentBeat.load();
     const double beatEnd = beatStart + deltaBeats;

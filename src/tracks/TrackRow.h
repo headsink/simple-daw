@@ -4,12 +4,15 @@
 #include "AudioTrack.h"
 #include "../plugin/PluginHost.h"
 
+class PluginEditorWindow;
+
 class TrackRow : public juce::Component
 {
 public:
     TrackRow(AudioTrack& track, PluginHost& host,
              std::function<void(TrackRow*)> onRemove,
              std::function<void()> onLayoutChanged);
+    ~TrackRow();
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -67,6 +70,9 @@ private:
     juce::Label abStatusLabel;
 
     bool abOpen = false;
+
+    PluginEditorWindow* editorWindow = nullptr;
+    std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TrackRow)
 };

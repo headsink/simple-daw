@@ -51,7 +51,7 @@ public:
     void closeButtonPressed() override
     {
         if (isCurrentlyModal()) exitModalState(0);
-        delete this;
+        juce::MessageManager::getInstance()->callAsync([this] { delete this; });
     }
 
     int getNumRows() override { return (int) pluginHost.getKnownList().getTypes().size(); }
@@ -129,29 +129,37 @@ private:
 class PluginEditorWindow : public juce::DocumentWindow
 {
 public:
-    explicit PluginEditorWindow(juce::AudioPluginInstance& p)
+    using OnClosed = std::function<void()>;
+
+    static PluginEditorWindow* open(juce::AudioPluginInstance& p, OnClosed cb)
+    {
+        auto* editor = p.createEditorAndMakeActive();
+        if (editor == nullptr) return nullptr;
+
+        auto* w = new PluginEditorWindow(p, std::move(cb));
+        w->setContentOwned(editor, true);
+        w->setUsingNativeTitleBar(true);
+        w->setResizable(true, false);
+        w->centreWithSize(w->getWidth(), w->getHeight());
+        w->setVisible(true);
+        w->toFront(true);
+        return w;
+    }
+
+    void closeButtonPressed() override
+    {
+        if (onClosed) onClosed();
+        delete this;
+    }
+
+private:
+    PluginEditorWindow(juce::AudioPluginInstance& p, OnClosed cb)
         : juce::DocumentWindow(p.getName(),
                                juce::Desktop::getInstance().getDefaultLookAndFeel()
                                    .findColour(juce::ResizableWindow::backgroundColourId),
                                juce::DocumentWindow::allButtons),
-          plugin(p)
-    {
-        setUsingNativeTitleBar(true);
-        auto* editor = plugin.createEditorAndMakeActive();
-        if (editor == nullptr)
-        {
-            delete this;
-            return;
-        }
-        setContentOwned(editor, true);
-        setResizable(true, false);
-        centreWithSize(getWidth(), getHeight());
-        setVisible(true);
-        toFront(true);
-    }
+          plugin(p), onClosed(std::move(cb)) {}
 
-    void closeButtonPressed() override { delete this; }
-
-private:
     juce::AudioPluginInstance& plugin;
+    OnClosed onClosed;
 };

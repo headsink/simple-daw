@@ -42,6 +42,7 @@ void AudioTrack::setSolo(bool s)  { solo.store(s); }
 
 void AudioTrack::setPlugin(std::unique_ptr<juce::AudioPluginInstance> p)
 {
+    const juce::SpinLock::ScopedLockType sl(pluginLock);
     if (plugin) plugin->releaseResources();
     plugin = std::move(p);
     if (plugin)
@@ -56,6 +57,7 @@ void AudioTrack::setPlugin(std::unique_ptr<juce::AudioPluginInstance> p)
 
 void AudioTrack::clearPlugin()
 {
+    const juce::SpinLock::ScopedLockType sl(pluginLock);
     if (plugin) plugin->releaseResources();
     plugin.reset();
     pluginBypass.store(false);
@@ -79,8 +81,12 @@ void AudioTrack::renderInto(juce::AudioBuffer<float>& dest, int startSample, int
 
     if (plugin && !pluginBypass.load())
     {
-        pluginMidiBuffer.clear();
-        plugin->processBlock(scratchBuffer, pluginMidiBuffer);
+        const juce::SpinLock::ScopedTryLockType sl(pluginLock);
+        if (sl.isLocked())
+        {
+            pluginMidiBuffer.clear();
+            plugin->processBlock(scratchBuffer, pluginMidiBuffer);
+        }
     }
 
     const float g = gain.load();

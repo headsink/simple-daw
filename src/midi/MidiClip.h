@@ -14,8 +14,8 @@ public:
     double getStartBeat() const { return startBeat; }
     void setStartBeat(double b) { startBeat = b; }
 
-    double getLengthBeats() const { return lengthBeats; }
-    void setLengthBeats(double b) { lengthBeats = b; }
+    double getLengthBeats() const { return lengthBeats.load(); }
+    void setLengthBeats(double b) { lengthBeats.store(b); }
 
     const std::vector<MidiNote>& getNotes() const { return notes; }
     std::vector<MidiNote>& getNotes() { return notes; }
@@ -31,6 +31,6 @@ public:
 private:
     int id = 0;
     double startBeat = 0.0;
-    double lengthBeats = 8.0;
+    std::atomic<double> lengthBeats{8.0};
     std::vector<MidiNote> notes;
 };
