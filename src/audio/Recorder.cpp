@@ -58,8 +58,10 @@ juce::String Recorder::stopRecording()
 
     const juce::String filename = "simple-daw-recording-" +
         juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S") + ".wav";
-    juce::File outFile(juce::File::getSpecialLocation(juce::File::tempDirectory)
-        .getChildFile(filename));
+    juce::File outDir(juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+        .getChildFile("Simple DAW Recordings"));
+    outDir.createDirectory();
+    juce::File outFile(outDir.getChildFile(filename));
 
     juce::WavAudioFormat wavFormat;
     std::unique_ptr<juce::FileOutputStream> stream(outFile.createOutputStream());
