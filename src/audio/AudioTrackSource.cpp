@@ -30,6 +30,7 @@ void AudioTrackSource::loadFile(const juce::File& file)
     loadedFileName = file.getFileName() + "  (" + juce::String(reader->numChannels)
         + " ch, " + juce::String(reader->lengthInSamples) + " samples, "
         + juce::String((int)reader->sampleRate) + " Hz)";
+    loadedFilePath = file.getFullPathName();
 }
 
 void AudioTrackSource::setPlaying(bool shouldPlay) { playing.store(shouldPlay); }

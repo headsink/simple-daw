@@ -22,6 +22,7 @@ public:
     void refreshTimeLabel();
     void refreshPluginLabel();
     void refreshAbLabels();
+    void setNameText(const juce::String& text) { nameLabel.setText(text, juce::dontSendNotification); }
 
 private:
     void openFile();

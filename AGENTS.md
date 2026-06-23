@@ -25,6 +25,7 @@
 **Piano roll Phase 2 (UI) — Complete.** `PianoRollComponent : juce::Component + juce::Timer` (30 fps playhead). Left piano keys (click to audition via `MidiKeyboardState`), grid with bar/beat lines, black/white key row backgrounds. **Drag-to-draw** new notes (snap to grid), **drag to move** notes (pitch + beat), **drag right edge to resize**, **right-click to delete**. Snap combo: 1/4, 1/8, 1/16, 1/16T (triplet). Red playhead line reads `MidiTrack::getCurrentBeat()`. Opens in a `PianoRollWindow : juce::DocumentWindow` (760×440, resizable, native title bar, self-deletes on close). `MainComponent` tracks the open window via raw pointer + `onClosed` callback (deletes in destructor). `MidiClip` gained a `juce::CriticalSection lock`; `PianoRollComponent` uses `ScopedLock` when modifying notes, `MidiTrack::emitNoteOns` uses `ScopedTryLock` (skips note scanning if locked — tries again next block).
 **Master peak meter — Complete.** `src/ui/PeakMeterComponent.h` — custom `Component + Timer` (30 fps) that reads `std::atomic<float>&` master peak via `exchange(0.0f)` (atomic read+reset), applies exponential decay (`max(p, displayed * 0.88f)`), and paints a log-scale bar (-60 dB to 0 dB, green < -24 dB, yellow < -12 dB, red >= -12 dB). Audio thread in `MainComponent::getNextAudioBlock` computes `getMagnitude` per channel after the master gain is applied and stores the max. Meter is placed in the top row to the left of the Master gain slider.
 **ASIO audio settings panel — Complete.** `Settings` button in the top row opens a `SettingsWindow : juce::DocumentWindow` (500×400, resizable) containing a `juce::AudioDeviceSelectorComponent` wired to the existing `deviceManager`. User can switch from WASAPI to ASIO (Komplete Audio), change buffer size, and sample rate. Changes apply immediately. `MainComponent` tracks the window via raw pointer + `onClosed` callback (deletes in destructor).
+**JSON save/load — Complete.** **Save** and **Load** buttons in the top row. Save serialises the full session to a `.sdaw` JSON file (master/synth/midi gains, BPM, MIDI clip notes, audio tracks with file path + gain/pan/mute/solo/loop/A/B region). Load restores everything, re-loading audio files from their saved paths (skips tracks whose file is missing). Uses `juce::DynamicObject` + `juce::JSON::writeToStream` / `juce::JSON::parse`. `AudioTrackSource` gained a `loadedFilePath` field + `getFilePath()`. `TrackRow` gained `setNameText()` for restoring the name label after load. Plugin state (parameter values) is not saved — plugins must be re-added manually after load.
 
 ### What's working
 
@@ -92,6 +93,10 @@
 - **`ResizableWindow::addAndMakeVisible(Component*, int)` hides `Component::addAndMakeVisible(Component&, int).** Add `using juce::Component::addAndMakeVisible;` inside `DocumentWindow` subclasses that add children directly.
 - **`AudioProcessor::createEditorIfNeeded()` is deprecated in JUCE 8.** Use `createEditorAndMakeActive()` (same behaviour).
 - **`AudioFormatManager::registerBasicFormats()`** bundles WAV/AIFF/FLAC/MP3 decoders.
+- **`File::deleteFile()`** is the method name (not `delete()`, which is a keyword and can confuse the parser in some contexts).
+- **`FileChooser::browseForFileToSave(bool warnAboutOverwritingExistingFiles)`** takes a bool — the `browseForFileToOpen()` variant takes `nullptr` by default.
+- **`JSON::writeToStream(OutputStream&, const var&, bool pretty)`** — there is no `JSON::writeToFile`. Use `File::createOutputStream()` + `writeToStream()`.
+- **`juce::var` does not implicitly convert to `juce::String`.** Use `var.toString()` or `static_cast<juce::String>(var)`.
 - **WASAPI buffer size is 480** on the Komplete Audio 1. Switch to Komplete Audio ASIO for ~2-3 ms latency.
 - **Window size is 960×600** — keep this as the default; user confirmed it fits. Do not bump above 600 without checking.
 - **`juce::Viewport` inserts an extra component layer** between the viewed component and the viewport's parent. A child that calls `getParentComponent()->...->resized()` to reach the top-level window will land on the viewport (or its internal view holder), not `MainComponent`. **Use an explicit callback (e.g. `onLayoutChanged`) instead of walking the parent chain** when a child needs to trigger a parent layout. `getTopLevelComponent()->resized()` also fails: it returns the `DocumentWindow`, and `DocumentWindow::resized()` calls `setContentOwned`-equivalent with the *same* bounds, which is a no-op in JUCE — so `MainComponent::resized()` never fires. The only reliable pattern is a direct callback to `MainComponent::refreshLayout()`.
@@ -131,12 +136,11 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 
 ## Next session — pick up here
 
-**ASIO audio settings panel — Complete.** Settings button opens `AudioDeviceSelectorComponent` for device/buffer/rate selection. Runtime test pending (user should switch to Komplete Audio ASIO for lower latency).
+**JSON save/load — Complete.** Save/Load buttons serialise the full session to `.sdaw` JSON files (gains, BPM, MIDI clip, audio tracks). Runtime test pending.
 
-**Recommended next: pick a stretch task.** The core DAW is now functional: multi-track audio mixer with VST3 inserts, A/B looping, MIDI sequencer with piano roll editor, master peak meter, ASIO settings panel. The remaining items are polish and I/O:
+**Recommended next: pick a stretch task.** The core DAW is now functional: multi-track audio mixer with VST3 inserts, A/B looping, MIDI sequencer with piano roll editor, master peak meter, ASIO settings panel, JSON save/load. The remaining items are polish and I/O:
 
 ### Stretch tasks (pick any)
-- **JSON save/load** — restore tracks + plugin state + MIDI clips on relaunch.
 - **`juce::MidiOutput`** — route on-screen keyboard notes to a selectable MIDI out.
 - **Velocity lane** in the piano roll (bottom strip, drag to adjust velocity per note).
 - **Piano roll improvements**: horizontal scroll for clips > 8 beats, zoom, copy/paste notes, undo/redo.
@@ -244,9 +248,10 @@ simple-daw/
 13. MIDI playback (sequencer → synth) — done (engine + UI)
 14. ✓ **Master peak meter** (log-scale bar, atomic read+reset, decay)
 15. ✓ **ASIO audio settings panel** (AudioDeviceSelectorComponent in DocumentWindow)
-16. Recording (ASIO input → audio track)
+16. ✓ **JSON save/load** (save/load buttons, `.sdaw` JSON format, restore gains/BPM/clip/tracks)
+17. Recording (ASIO input → audio track)
 
-**ASIO settings panel is complete. Next: pick a stretch task.**
+**JSON save/load is complete. Next: pick a stretch task.**
 
 ---
 

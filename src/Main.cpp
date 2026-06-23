@@ -62,6 +62,14 @@ public:
             }
         };
 
+        addAndMakeVisible(saveButton);
+        saveButton.setButtonText("Save");
+        saveButton.onClick = [this] { saveSession(); };
+
+        addAndMakeVisible(loadButton);
+        loadButton.setButtonText("Load");
+        loadButton.onClick = [this] { loadSession(); };
+
         addAndMakeVisible(tracksViewport);
         tracksViewport.setViewedComponent(&tracksContainer);
         tracksViewport.setScrollBarsShown(true, false);
@@ -368,6 +376,166 @@ private:
         seqStopButton.setEnabled(midiTrack.isPlaying());
     }
 
+    void saveSession()
+    {
+        juce::FileChooser chooser("Save Session",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+            "*.sdaw");
+        if (! chooser.browseForFileToSave(true)) return;
+
+        auto file = chooser.getResult();
+        if (file.existsAsFile() && ! file.deleteFile()) return;
+
+        auto* obj = new juce::DynamicObject();
+        obj->setProperty("version", 1);
+        obj->setProperty("masterGain", (double) masterGainTarget.load());
+        obj->setProperty("synthGain", (double) synthGain.load());
+        obj->setProperty("midiGain", (double) midiGain.load());
+        obj->setProperty("bpm", midiTrack.getBpm());
+
+        auto* clipObj = new juce::DynamicObject();
+        clipObj->setProperty("lengthBeats", midiTrack.getClip().getLengthBeats());
+        {
+            const juce::ScopedLock sl(midiTrack.getClip().lock);
+            juce::Array<juce::var> notesArray;
+            for (const auto& note : midiTrack.getClip().getNotes())
+            {
+                auto* n = new juce::DynamicObject();
+                n->setProperty("pitch", note.pitch);
+                n->setProperty("startBeat", note.startBeat);
+                n->setProperty("lengthBeats", note.lengthBeats);
+                n->setProperty("velocity", (int) note.velocity);
+                notesArray.add(juce::var(n));
+            }
+            clipObj->setProperty("notes", notesArray);
+        }
+        obj->setProperty("midiClip", juce::var(clipObj));
+
+        juce::Array<juce::var> tracksArray;
+        for (const auto& t : tracks)
+        {
+            if (! t->getSource().isLoaded()) continue;
+            auto* tObj = new juce::DynamicObject();
+            tObj->setProperty("filePath", t->getSource().getFilePath());
+            tObj->setProperty("gain", (double) t->getGain());
+            tObj->setProperty("pan", (double) t->getPan());
+            tObj->setProperty("mute", t->isMuted());
+            tObj->setProperty("solo", t->isSolo());
+            tObj->setProperty("looping", t->getSource().isLooping());
+            tObj->setProperty("loopStart", t->getLoopStart());
+            tObj->setProperty("loopEnd", t->getLoopEnd());
+            tracksArray.add(juce::var(tObj));
+        }
+        obj->setProperty("tracks", tracksArray);
+
+        if (auto stream = std::unique_ptr<juce::FileOutputStream>(file.createOutputStream()))
+        {
+            juce::JSON::writeToStream(*stream, juce::var(obj), true);
+            stream->flush();
+        }
+    }
+
+    void loadSession()
+    {
+        juce::FileChooser chooser("Load Session",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+            "*.sdaw");
+        if (! chooser.browseForFileToOpen()) return;
+
+        auto file = chooser.getResult();
+        if (! file.existsAsFile()) return;
+
+        auto json = juce::JSON::parse(file.loadFileAsString());
+        if (! json.isObject())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
+                "Load Error", "Invalid session file.");
+            return;
+        }
+
+        midiTrack.stop();
+
+        masterGainTarget.store((float)(double) json["masterGain"]);
+        masterGainSlider.setValue((double) masterGainTarget.load(), juce::dontSendNotification);
+        synthGain.store((float)(double) json["synthGain"]);
+        synthGainSlider.setValue((double) synthGain.load(), juce::dontSendNotification);
+        midiGain.store((float)(double) json["midiGain"]);
+        midiGainSlider.setValue((double) midiGain.load(), juce::dontSendNotification);
+
+        midiTrack.setBpm((double) json["bpm"]);
+        bpmSlider.setValue((double) json["bpm"], juce::dontSendNotification);
+
+        auto* clipObj = json["midiClip"].getDynamicObject();
+        if (clipObj != nullptr)
+        {
+            const juce::ScopedLock sl(midiTrack.getClip().lock);
+            midiTrack.getClip().clearNotes();
+            midiTrack.getClip().setLengthBeats((double) clipObj->getProperty("lengthBeats"));
+            auto* notesArray = clipObj->getProperty("notes").getArray();
+            if (notesArray != nullptr)
+            {
+                for (const auto& noteVar : *notesArray)
+                {
+                    auto* nObj = noteVar.getDynamicObject();
+                    if (nObj == nullptr) continue;
+                    MidiNote note;
+                    note.pitch = (int) nObj->getProperty("pitch");
+                    note.startBeat = (double) nObj->getProperty("startBeat");
+                    note.lengthBeats = (double) nObj->getProperty("lengthBeats");
+                    note.velocity = (uint8_t)(int) nObj->getProperty("velocity");
+                    midiTrack.getClip().addNote(note);
+                }
+            }
+        }
+
+        trackRows.clear();
+        tracks.clear();
+
+        double sr = 48000.0;
+        int bs = 512;
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+        {
+            sr = device->getCurrentSampleRate();
+            bs = device->getCurrentBufferSizeSamples();
+        }
+
+        auto* tracksArray = json["tracks"].getArray();
+        if (tracksArray != nullptr)
+        {
+            for (const auto& trackVar : *tracksArray)
+            {
+                auto* tObj = trackVar.getDynamicObject();
+                if (tObj == nullptr) continue;
+
+                juce::File audioFile(tObj->getProperty("filePath").toString());
+                if (! audioFile.existsAsFile()) continue;
+
+                auto track = std::make_unique<AudioTrack>();
+                track->prepareToPlay(bs, sr);
+                track->loadFile(audioFile);
+                track->setGain((float)(double) tObj->getProperty("gain"));
+                track->setPan((float)(double) tObj->getProperty("pan"));
+                track->setMute((bool) tObj->getProperty("mute"));
+                track->setSolo((bool) tObj->getProperty("solo"));
+                track->getSource().setLooping((bool) tObj->getProperty("looping"));
+                track->setLoopStart((int)(double) tObj->getProperty("loopStart"));
+                track->setLoopEnd((int)(double) tObj->getProperty("loopEnd"));
+
+                auto* trackPtr = track.get();
+                auto row = std::make_unique<TrackRow>(*trackPtr, pluginHost,
+                    [this](TrackRow* r) { removeTrack(r); },
+                    [this] { refreshLayout(); });
+                row->setNameText(track->getSource().getLoadedFileName());
+
+                tracks.push_back(std::move(track));
+                trackRows.push_back(std::move(row));
+                tracksContainer.addAndMakeVisible(trackRows.back().get());
+            }
+        }
+
+        refreshLayout();
+    }
+
     void refreshLayout()
     {
         auto area = getLocalBounds().reduced(12);
@@ -391,6 +559,9 @@ private:
         peakLabel.setBounds(topRow.removeFromRight(40));
         topRow.removeFromRight(4);
         peakMeter.setBounds(topRow.removeFromRight(140).reduced(0, 6));
+        saveButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
+        topRow.removeFromLeft(4);
+        loadButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
         area.removeFromTop(6);
 
         auto seqRow = area.removeFromTop(28);
@@ -499,6 +670,8 @@ private:
     juce::TextButton addTrackButton;
     juce::TextButton scanPluginsButton;
     juce::TextButton settingsButton;
+    juce::TextButton saveButton;
+    juce::TextButton loadButton;
     juce::TextButton seqPlayButton;
     juce::TextButton seqStopButton;
     juce::TextButton seqLoopButton;

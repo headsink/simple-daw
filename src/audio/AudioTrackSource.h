@@ -27,6 +27,7 @@ public:
     bool isPlaying() const;
     bool isLooping() const;
     const juce::String& getLoadedFileName() const;
+    const juce::String& getFilePath() const { return loadedFilePath; }
     int getNumChannels() const;
     int getNumSamples() const;
     int getPlayPosition() const;
@@ -44,4 +45,5 @@ private:
     std::atomic<int> loopEnd{0};
     double currentSampleRate = 44100.0;
     juce::String loadedFileName;
+    juce::String loadedFilePath;
 };
