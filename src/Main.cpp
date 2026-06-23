@@ -5,6 +5,7 @@
 #include "tracks/TrackRow.h"
 #include "plugin/PluginHost.h"
 #include "ui/PianoRollComponent.h"
+#include "ui/PeakMeterComponent.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -12,7 +13,8 @@ class MainComponent : public juce::AudioAppComponent,
 {
 public:
     MainComponent()
-        : midiKeyboard(synthSource.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
+        : midiKeyboard(synthSource.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard),
+          peakMeter(masterPeak)
     {
         setSize(960, 600);
 
@@ -161,6 +163,12 @@ public:
             masterGainTarget.store((float)masterGainSlider.getValue());
         };
 
+        addAndMakeVisible(peakMeter);
+        addAndMakeVisible(peakLabel);
+        peakLabel.setText("Peak", juce::dontSendNotification);
+        peakLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+        peakLabel.setJustificationType(juce::Justification::centredRight);
+
         addTrack();
         refreshLayout();
         updateSeqButtons();
@@ -241,6 +249,14 @@ public:
         const float master = masterGainSmoothed.getNextValue();
         for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch)
             bufferToFill.buffer->applyGain(ch, bufferToFill.startSample, bufferToFill.numSamples, master);
+
+        float blockPeak = 0.0f;
+        for (int ch = 0; ch < bufferToFill.buffer->getNumChannels(); ++ch)
+            blockPeak = std::max(blockPeak, bufferToFill.buffer->getMagnitude(
+                ch, bufferToFill.startSample, bufferToFill.numSamples));
+        const float currentPeak = masterPeak.load();
+        if (blockPeak > currentPeak)
+            masterPeak.store(blockPeak);
     }
 
     void releaseResources() override
@@ -352,6 +368,10 @@ private:
         masterGainLabel.setBounds(topRow.removeFromRight(60));
         topRow.removeFromRight(4);
         masterGainSlider.setBounds(topRow.removeFromRight(180));
+        topRow.removeFromRight(12);
+        peakLabel.setBounds(topRow.removeFromRight(40));
+        topRow.removeFromRight(4);
+        peakMeter.setBounds(topRow.removeFromRight(140).reduced(0, 6));
         area.removeFromTop(6);
 
         auto seqRow = area.removeFromTop(28);
@@ -474,6 +494,9 @@ private:
     juce::Slider midiGainSlider;
     juce::Label masterGainLabel;
     juce::Slider masterGainSlider;
+    juce::Label peakLabel;
+    std::atomic<float> masterPeak{0.0f};
+    PeakMeterComponent peakMeter;
     juce::OwnedArray<juce::MidiInput> openedInputs;
     juce::AudioBuffer<float> scratchBuffer;
     juce::AudioBuffer<float> midiTrackScratch;
