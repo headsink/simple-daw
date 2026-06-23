@@ -6,7 +6,8 @@
 class PluginChooserDialog
     : public juce::DocumentWindow,
       public juce::ListBoxModel,
-      public juce::ChangeListener
+      public juce::ChangeListener,
+      public juce::Timer
 {
 public:
     using OnChosen = std::function<void(const juce::PluginDescription&)>;
@@ -40,11 +41,13 @@ public:
         statusLabel.setJustificationType(juce::Justification::centredLeft);
         updateRowCountText();
 
+        startTimer(150);
         enterModalState(false);
     }
 
     ~PluginChooserDialog() override
     {
+        stopTimer();
         pluginHost.getKnownList().removeChangeListener(this);
     }
 
@@ -84,6 +87,22 @@ public:
         updateRowCountText();
     }
 
+    void timerCallback() override
+    {
+        if (pluginHost.isScanning())
+        {
+            const int n = pluginHost.getScanFoundCount();
+            statusLabel.setText("Scanning... (" + juce::String(n) + " found)",
+                                juce::dontSendNotification);
+            rescanButton.setEnabled(false);
+        }
+        else
+        {
+            rescanButton.setEnabled(true);
+            updateRowCountText();
+        }
+    }
+
     void resized() override
     {
         juce::DocumentWindow::resized();
@@ -101,22 +120,18 @@ private:
 
     void triggerRescan()
     {
-        statusLabel.setText("Scanning... (this may take a while)", juce::dontSendNotification);
-        rescanButton.setEnabled(false);
-        juce::Timer::callAfterDelay(10, [this]
-        {
-            pluginHost.scanForPlugins();
-            rescanButton.setEnabled(true);
-            updateRowCountText();
-        });
+        pluginHost.scanForPluginsAsync();
     }
 
     void updateRowCountText()
     {
         const int n = getNumRows();
-        statusLabel.setText(n == 0 ? "No plugins found. Click Rescan."
-                                   : juce::String(n) + " plugin" + (n == 1 ? "" : "s") + " available. Double-click to load.",
-                            juce::dontSendNotification);
+        if (n == 0)
+            statusLabel.setText("No plugins found. Click Rescan.",
+                                juce::dontSendNotification);
+        else
+            statusLabel.setText(juce::String(n) + " plugin" + (n == 1 ? "" : "s") + " available. Double-click to load.",
+                                juce::dontSendNotification);
     }
 
     PluginHost& pluginHost;

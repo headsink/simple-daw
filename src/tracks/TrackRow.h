@@ -26,13 +26,13 @@ public:
     void refreshPluginLabel();
     void refreshAbLabels();
     void setNameText(const juce::String& text) { nameLabel.setText(text, juce::dontSendNotification); }
+    void updateButtons();
 
 private:
     void openFile();
     void openPluginChooser();
     void showPluginEditor();
     void toggleAbPanel();
-    void updateButtons();
     void layoutTopRow(juce::Rectangle<int> area);
     void layoutAbRow(juce::Rectangle<int> area);
     static juce::String formatTime(double seconds);

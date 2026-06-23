@@ -14,6 +14,22 @@ public:
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    void mouseMove(const juce::MouseEvent& e) override;
+
+    void selectAll();
+    void clearSelection();
+    void copySelection();
+    void cutSelection();
+    void pasteAt(double beat);
+    void deleteSelection();
+    void nudgeSelected(int deltaPitch, double deltaBeats);
+
+    int getNumSelected() const { return (int) selectedIndices.size(); }
+    bool hasSelection() const { return ! selectedIndices.empty(); }
+    void revalidateSelection();
+
+    double getPasteBeatHint() const { return pasteBeatHint; }
+    void setPasteBeatHint(double b) { pasteBeatHint = b; }
 
 private:
     int gridHeight() const;
@@ -38,15 +54,18 @@ private:
     void drawNotes(juce::Graphics& g);
     void drawVelocityBars(juce::Graphics& g);
     void drawPlayhead(juce::Graphics& g);
+    void drawSelectionRect(juce::Graphics& g);
 
     void startAudition(int pitch);
     void stopAudition();
+
+    void updateSelectionFromDragRect();
 
     PianoRollComponent& owner;
     juce::MidiKeyboardState& keyboardState;
     MidiClip& clip;
 
-    enum class DragMode { none, creating, moving, resizing, velocity };
+    enum class DragMode { none, creating, moving, resizing, velocity, marquee };
     DragMode dragMode = DragMode::none;
     int dragNoteIndex = -1;
     double dragStartBeat = 0.0;
@@ -55,13 +74,27 @@ private:
     double dragOrigLength = 0.0;
     int dragOrigPitch = 0;
     uint8_t dragOrigVelocity = 80;
+    bool dragStatePushed = false;
 
     bool creatingNote = false;
     int tempPitch = 0;
     double tempStart = 0.0;
     double tempLength = 0.0;
 
+    bool dragMoved = false;
+
+    std::set<int> selectedIndices;
+    std::set<int> savedSelectionOnDragStart;
+    int marqueeX0 = 0;
+    int marqueeY0 = 0;
+    int marqueeX1 = 0;
+    int marqueeY1 = 0;
+
     int auditionPitch = -1;
+
+    static std::vector<MidiNote> clipboard;
+
+    double pasteBeatHint = 0.0;
 };
 
 class PianoRollComponent : public juce::Component,
@@ -69,23 +102,30 @@ class PianoRollComponent : public juce::Component,
 {
 public:
     PianoRollComponent(MidiTrack& track, juce::MidiKeyboardState& keys);
+    ~PianoRollComponent() override;
 
     void paint(juce::Graphics& g) override;
     void resized() override;
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
+    void mouseExit(const juce::MouseEvent& e) override;
 
     void timerCallback() override;
+
+    bool keyPressed(const juce::KeyPress& key) override;
 
     int getBeatWidth() const { return (int) beatWidth; }
     double getSnapBeats() const { return snapBeats; }
     double getPlayheadBeat() const { return playheadBeat; }
     bool isPlaying() const { return midiTrack.isPlaying(); }
     MidiClip& getClip() { return clip; }
+    PianoRollContent& getContent() { return *content; }
     int getKeyWidth() const { return keyWidth; }
     int getRowHeight() const { return rowHeight; }
     int getNumPitches() const { return numPitches; }
     int getFirstPitch() const { return firstPitch; }
+
+    void grabKeyboardFocusNow();
 
 private:
     static constexpr int keyWidth = 56;
@@ -102,6 +142,9 @@ private:
     int keyYForPitch(int pitch) const;
     int pitchAtKeyY(int y) const;
 
+    void undo();
+    void redo();
+
     MidiTrack& midiTrack;
     MidiClip& clip;
     juce::MidiKeyboardState& keyboardState;
@@ -110,6 +153,10 @@ private:
     juce::TextButton zoomOutButton {"-"};
     juce::TextButton zoomInButton {"+"};
     juce::TextButton clearButton {"Clear"};
+    juce::TextButton undoButton {"Undo"};
+    juce::TextButton redoButton {"Redo"};
+    juce::TextButton copyButton {"Copy"};
+    juce::TextButton pasteButton {"Paste"};
     juce::Label infoLabel;
 
     double snapBeats = 0.25;
@@ -136,12 +183,14 @@ public:
           onClosed(std::move(cb))
     {
         setUsingNativeTitleBar(true);
-        setContentOwned(new PianoRollComponent(track, keys), true);
+        auto* comp = new PianoRollComponent(track, keys);
+        setContentOwned(comp, true);
         setResizable(true, false);
-        setSize(760, 540);
+        setSize(820, 560);
         centreWithSize(getWidth(), getHeight());
         setVisible(true);
         toFront(true);
+        comp->grabKeyboardFocusNow();
     }
 
     void closeButtonPressed() override

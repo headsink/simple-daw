@@ -5,11 +5,17 @@
 class AudioTrackSource : public juce::AudioSource
 {
 public:
+    AudioTrackSource() = default;
+    ~AudioTrackSource() override;
+
     void prepareToPlay(int, double) override;
     void releaseResources() override;
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& info) override;
 
     void loadFile(const juce::File& file);
+    void loadFileAsync(const juce::File& file,
+                       std::function<void(bool, const juce::String&)> onComplete = {});
+    bool isLoading() const { return loadingFlag.load() > 0; }
 
     void setPlaying(bool shouldPlay);
     void stop();
@@ -35,6 +41,8 @@ public:
 
 private:
     int clampLoopBound(int sample) const;
+    void applyLoadedBuffer(juce::AudioBuffer<float> newBuffer, double sr,
+                           juce::String newName, juce::String newPath);
 
     juce::AudioBuffer<float> fileBuffer;
     std::atomic<int> playPosition{0};
@@ -42,6 +50,9 @@ private:
     std::atomic<bool> looping{false};
     std::atomic<int> loopStart{0};
     std::atomic<int> loopEnd{0};
+    std::atomic<int> loadingFlag{0};
+    std::atomic<int> loadGeneration{0};
+    std::shared_ptr<std::atomic<int>> lifetimeToken;
     double currentSampleRate = 44100.0;
     juce::String loadedFileName;
     juce::String loadedFilePath;

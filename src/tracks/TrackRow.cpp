@@ -333,19 +333,41 @@ void TrackRow::openFile()
         auto file = chooser.getResult();
         if (file.existsAsFile())
         {
-            track.loadFile(file);
-            nameLabel.setText(track.getSource().getLoadedFileName(), juce::dontSendNotification);
-            updateButtons();
-            refreshTimeLabel();
-            if (abOpen)
-            {
-                const int total = track.getSource().getNumSamples();
-                startSlider.setRange(0.0, (double) std::max(1, total), 1.0);
-                endSlider.setRange(0.0, (double) std::max(1, total), 1.0);
-                startSlider.setValue((double) track.getLoopStart(), juce::dontSendNotification);
-                endSlider.setValue((double) track.getLoopEnd(), juce::dontSendNotification);
-                refreshAbLabels();
-            }
+            nameLabel.setText("(loading...) " + file.getFileName(), juce::dontSendNotification);
+            playButton.setEnabled(false);
+            stopButton.setEnabled(false);
+            auto aliveFlag = alive;
+            track.loadFileAsync(file,
+                [this, aliveFlag](bool ok, const juce::String& err)
+                {
+                    if (! *aliveFlag) return;
+                    juce::MessageManager::getInstance()->callAsync(
+                        [this, aliveFlag, ok, err]
+                        {
+                            if (! *aliveFlag) return;
+                            if (ok)
+                            {
+                                nameLabel.setText(track.getSource().getLoadedFileName(),
+                                                  juce::dontSendNotification);
+                            }
+                            else
+                            {
+                                nameLabel.setText("(failed: " + err + ")",
+                                                  juce::dontSendNotification);
+                            }
+                            updateButtons();
+                            refreshTimeLabel();
+                            if (abOpen)
+                            {
+                                const int total = track.getSource().getNumSamples();
+                                startSlider.setRange(0.0, (double) std::max(1, total), 1.0);
+                                endSlider.setRange(0.0, (double) std::max(1, total), 1.0);
+                                startSlider.setValue((double) track.getLoopStart(), juce::dontSendNotification);
+                                endSlider.setValue((double) track.getLoopEnd(), juce::dontSendNotification);
+                                refreshAbLabels();
+                            }
+                        });
+                });
         }
     }
 }

@@ -2,37 +2,113 @@
 
 void AudioTrackSource::prepareToPlay(int, double sampleRate)
 {
+    if (! lifetimeToken)
+        lifetimeToken = std::make_shared<std::atomic<int>>(0);
     currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
+}
+
+AudioTrackSource::~AudioTrackSource()
+{
+    if (lifetimeToken)
+        lifetimeToken->fetch_add(1);
 }
 
 void AudioTrackSource::releaseResources() {}
 
 void AudioTrackSource::loadFile(const juce::File& file)
 {
-    const juce::SpinLock::ScopedLockType sl(bufferLock);
-
     juce::AudioFormatManager mgr;
     mgr.registerBasicFormats();
 
     std::unique_ptr<juce::AudioFormatReader> reader(mgr.createReaderFor(file));
     if (reader == nullptr)
     {
-        fileBuffer.setSize(0, 0);
-        loadedFileName = "(failed to load)";
+        applyLoadedBuffer({}, 0.0, "(failed to load)", juce::String());
         return;
     }
 
-    fileBuffer.setSize((int)reader->numChannels, (int)reader->lengthInSamples);
-    reader->read(&fileBuffer, 0, (int)reader->lengthInSamples, 0, true, true);
-    playPosition.store(0);
-    playing.store(false);
-    currentSampleRate = reader->sampleRate;
-    loopStart.store(0);
-    loopEnd.store((int)reader->lengthInSamples);
-    loadedFileName = file.getFileName() + "  (" + juce::String(reader->numChannels)
+    juce::AudioBuffer<float> newBuffer((int)reader->numChannels, (int)reader->lengthInSamples);
+    reader->read(&newBuffer, 0, (int)reader->lengthInSamples, 0, true, true);
+
+    const double sr = reader->sampleRate;
+    const juce::String name = file.getFileName() + "  (" + juce::String(reader->numChannels)
         + " ch, " + juce::String(reader->lengthInSamples) + " samples, "
         + juce::String((int)reader->sampleRate) + " Hz)";
-    loadedFilePath = file.getFullPathName();
+    const juce::String path = file.getFullPathName();
+
+    applyLoadedBuffer(std::move(newBuffer), sr, name, path);
+}
+
+void AudioTrackSource::loadFileAsync(const juce::File& file,
+                                     std::function<void(bool, const juce::String&)> onComplete)
+{
+    if (! lifetimeToken)
+        lifetimeToken = std::make_shared<std::atomic<int>>(0);
+
+    const int myGen = loadGeneration.fetch_add(1) + 1;
+    loadingFlag.fetch_add(1);
+    auto token = lifetimeToken;
+    const int myVersion = token->load();
+
+    std::thread([this, token, myVersion, myGen, file, cb = std::move(onComplete)]() mutable
+    {
+        if (token->load() != myVersion) return;
+
+        juce::AudioFormatManager mgr;
+        mgr.registerBasicFormats();
+
+        std::unique_ptr<juce::AudioFormatReader> reader(mgr.createReaderFor(file));
+        if (reader == nullptr)
+        {
+            juce::MessageManager::getInstance()->callAsync(
+                [this, token, myVersion, myGen, cb]()
+                mutable
+                {
+                    if (token->load() != myVersion) return;
+                    if (loadGeneration.load() == myGen)
+                    {
+                        loadingFlag.store(0);
+                        if (cb) cb(false, "Failed to decode file");
+                    }
+                });
+            return;
+        }
+
+        if (token->load() != myVersion) return;
+
+        juce::AudioBuffer<float> newBuffer((int)reader->numChannels, (int)reader->lengthInSamples);
+        reader->read(&newBuffer, 0, (int)reader->lengthInSamples, 0, true, true);
+
+        const double sr = reader->sampleRate;
+        const juce::String name = file.getFileName() + "  (" + juce::String(reader->numChannels)
+            + " ch, " + juce::String(reader->lengthInSamples) + " samples, "
+            + juce::String((int)reader->sampleRate) + " Hz)";
+        const juce::String path = file.getFullPathName();
+
+        juce::MessageManager::getInstance()->callAsync(
+            [this, token, myVersion, myGen, cb, newBuffer = std::move(newBuffer), sr, name, path]() mutable
+            {
+                if (token->load() != myVersion) return;
+                if (loadGeneration.load() != myGen) return;
+                applyLoadedBuffer(std::move(newBuffer), sr, name, path);
+                loadingFlag.store(0);
+                if (cb) cb(true, juce::String());
+            });
+    }).detach();
+}
+
+void AudioTrackSource::applyLoadedBuffer(juce::AudioBuffer<float> newBuffer, double sr,
+                                         juce::String newName, juce::String newPath)
+{
+    const juce::SpinLock::ScopedLockType sl(bufferLock);
+    fileBuffer = std::move(newBuffer);
+    playPosition.store(0);
+    playing.store(false);
+    if (sr > 0.0) currentSampleRate = sr;
+    loopStart.store(0);
+    loopEnd.store(fileBuffer.getNumSamples());
+    loadedFileName = newName;
+    loadedFilePath = newPath;
 }
 
 void AudioTrackSource::setPlaying(bool shouldPlay) { playing.store(shouldPlay); }

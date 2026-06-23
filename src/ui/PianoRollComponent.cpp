@@ -1,5 +1,7 @@
 #include "PianoRollComponent.h"
 
+std::vector<MidiNote> PianoRollContent::clipboard;
+
 PianoRollContent::PianoRollContent(PianoRollComponent& o, juce::MidiKeyboardState& keys, MidiClip& c)
     : owner(o), keyboardState(keys), clip(c) {}
 
@@ -129,12 +131,23 @@ void PianoRollContent::stopAudition()
     }
 }
 
+void PianoRollContent::revalidateSelection()
+{
+    int maxIdx = (int) clip.getNotes().size();
+    for (auto it = selectedIndices.begin(); it != selectedIndices.end(); )
+    {
+        if (*it < 0 || *it >= maxIdx) it = selectedIndices.erase(it);
+        else ++it;
+    }
+}
+
 void PianoRollContent::paint(juce::Graphics& g)
 {
     g.fillAll(juce::Colour(0xff1a1a1a));
     drawGrid(g);
     drawNotes(g);
     drawVelocityBars(g);
+    drawSelectionRect(g);
     drawPlayhead(g);
 }
 
@@ -190,12 +203,12 @@ void PianoRollContent::drawNotes(juce::Graphics& g)
         const int x = beatToX(n.startBeat);
         const int w = std::max(4, beatToX(n.startBeat + n.lengthBeats) - x);
         const int y = pitchToY(n.pitch);
-        const bool selected = (dragMode == DragMode::moving || dragMode == DragMode::resizing)
-                              && dragNoteIndex == i;
+        const bool selected = selectedIndices.count(i) > 0;
 
-        g.setColour(selected ? juce::Colour(0xff80a0f0) : juce::Colour(0xff5080d0));
+        g.setColour(selected ? juce::Colour(0xffe0c060) : juce::Colour(0xff5080d0));
         g.fillRoundedRectangle((float) x + 1, (float) y + 1, (float) w - 2, (float) owner.getRowHeight() - 2, 3.0f);
-    g.drawRoundedRectangle((float) x + 1, (float) y + 1, (float) w - 2, (float) owner.getRowHeight() - 2, 3.0f, 1.0f);
+        g.setColour(selected ? juce::Colour(0xfff0e080) : juce::Colour(0xff80a0d0));
+        g.drawRoundedRectangle((float) x + 1, (float) y + 1, (float) w - 2, (float) owner.getRowHeight() - 2, 3.0f, 1.0f);
 
         if (w > 30)
         {
@@ -230,13 +243,26 @@ void PianoRollContent::drawVelocityBars(juce::Graphics& g)
         const int w = std::max(4, beatToX(n.startBeat + n.lengthBeats) - x);
         const int barH = juce::jmax(2, (int) (((float) n.velocity / 127.0f) * (float) vH));
         const int barY = vY + vH - barH;
-        const bool selected = dragMode == DragMode::velocity && dragNoteIndex == i;
+        const bool selected = selectedIndices.count(i) > 0;
 
-        g.setColour(selected ? juce::Colour(0xff80a0f0) : juce::Colour(0xff5080d0));
+        g.setColour(selected ? juce::Colour(0xffe0c060) : juce::Colour(0xff5080d0));
         g.fillRect(x + 1, barY, w - 2, barH);
-        g.setColour(juce::Colour(0xffa0c0ff));
+        g.setColour(selected ? juce::Colour(0xfff0e080) : juce::Colour(0xffa0c0ff));
         g.drawRect(x + 1, barY, w - 2, barH, 1);
     }
+}
+
+void PianoRollContent::drawSelectionRect(juce::Graphics& g)
+{
+    if (dragMode != DragMode::marquee) return;
+    const int x0 = juce::jmin(marqueeX0, marqueeX1);
+    const int x1 = juce::jmax(marqueeX0, marqueeX1);
+    const int y0 = juce::jmin(marqueeY0, marqueeY1);
+    const int y1 = juce::jmax(marqueeY0, marqueeY1);
+    g.setColour(juce::Colour(0x403080e0));
+    g.fillRect(x0, y0, x1 - x0, y1 - y0);
+    g.setColour(juce::Colour(0xff6090e0));
+    g.drawRect(x0, y0, x1 - x0, y1 - y0, 1);
 }
 
 void PianoRollContent::drawPlayhead(juce::Graphics& g)
@@ -247,9 +273,127 @@ void PianoRollContent::drawPlayhead(juce::Graphics& g)
     g.drawVerticalLine(x, 0.0f, (float) contentTotalHeight());
 }
 
+void PianoRollContent::updateSelectionFromDragRect()
+{
+    const int x0 = juce::jmin(marqueeX0, marqueeX1);
+    const int x1 = juce::jmax(marqueeX0, marqueeX1);
+    const int y0 = juce::jmin(marqueeY0, marqueeY1);
+    const int y1 = juce::jmax(marqueeY0, marqueeY1);
+    selectedIndices.clear();
+    const juce::ScopedLock sl(clip.lock);
+    const auto& notes = clip.getNotes();
+    for (int i = 0; i < (int) notes.size(); ++i)
+    {
+        const auto& n = notes[i];
+        const int nx = beatToX(n.startBeat);
+        const int nw = std::max(4, beatToX(n.startBeat + n.lengthBeats) - nx);
+        const int ny = pitchToY(n.pitch);
+        if (nx + nw >= x0 && nx <= x1 && ny + owner.getRowHeight() >= y0 && ny <= y1)
+            selectedIndices.insert(i);
+    }
+}
+
+void PianoRollContent::selectAll()
+{
+    const juce::ScopedLock sl(clip.lock);
+    selectedIndices.clear();
+    const int n = (int) clip.getNotes().size();
+    for (int i = 0; i < n; ++i)
+        selectedIndices.insert(i);
+}
+
+void PianoRollContent::clearSelection()
+{
+    selectedIndices.clear();
+}
+
+void PianoRollContent::copySelection()
+{
+    if (selectedIndices.empty()) return;
+    clipboard.clear();
+    const juce::ScopedLock sl(clip.lock);
+    const auto& notes = clip.getNotes();
+    double minBeat = 1e9;
+    int minPitch = 128;
+    for (int idx : selectedIndices)
+    {
+        if (idx < 0 || idx >= (int) notes.size()) continue;
+        const auto& n = notes[idx];
+        clipboard.push_back(n);
+        if (n.startBeat < minBeat) minBeat = n.startBeat;
+        if (n.pitch < minPitch) minPitch = n.pitch;
+    }
+    for (auto& n : clipboard)
+    {
+        n.startBeat -= minBeat;
+        n.pitch -= minPitch;
+    }
+}
+
+void PianoRollContent::cutSelection()
+{
+    if (selectedIndices.empty()) return;
+    copySelection();
+    {
+        const juce::ScopedLock sl(clip.lock);
+        clip.removeNotes(selectedIndices);
+    }
+    selectedIndices.clear();
+    repaint();
+}
+
+void PianoRollContent::pasteAt(double beat)
+{
+    if (clipboard.empty()) return;
+    pasteBeatHint = beat;
+    std::vector<MidiNote> pasted = clipboard;
+    for (auto& n : pasted)
+        n.startBeat += beat;
+    {
+        const juce::ScopedLock sl(clip.lock);
+        clip.addNotes(pasted);
+    }
+    selectedIndices.clear();
+    revalidateSelection();
+    repaint();
+}
+
+void PianoRollContent::deleteSelection()
+{
+    if (selectedIndices.empty()) return;
+    {
+        const juce::ScopedLock sl(clip.lock);
+        clip.removeNotes(selectedIndices);
+    }
+    selectedIndices.clear();
+    repaint();
+}
+
+void PianoRollContent::nudgeSelected(int deltaPitch, double deltaBeats)
+{
+    if (selectedIndices.empty()) return;
+    bool changed = false;
+    {
+        const juce::ScopedLock sl(clip.lock);
+        auto& notes = clip.getNotes();
+        for (int idx : selectedIndices)
+        {
+            if (idx < 0 || idx >= (int) notes.size()) continue;
+            const int newPitch = juce::jlimit(0, 127, notes[idx].pitch + deltaPitch);
+            const double newBeat = std::max(0.0, notes[idx].startBeat + deltaBeats);
+            if (newPitch != notes[idx].pitch || newBeat != notes[idx].startBeat) changed = true;
+            notes[idx].pitch = newPitch;
+            notes[idx].startBeat = newBeat;
+        }
+    }
+    if (changed) repaint();
+}
+
 void PianoRollContent::mouseDown(const juce::MouseEvent& e)
 {
     const int y = e.y;
+    dragStartY = e.y;
+    dragStatePushed = false;
 
     if (y >= velocityAreaY())
     {
@@ -258,14 +402,25 @@ void PianoRollContent::mouseDown(const juce::MouseEvent& e)
         {
             {
                 const juce::ScopedLock sl(clip.lock);
+                clip.beginEdit();
                 dragOrigVelocity = clip.getNotes()[noteIdx].velocity;
+                clip.getNotes()[noteIdx].velocity = yToVelocity(e.y);
             }
+            dragStatePushed = true;
             dragMode = DragMode::velocity;
             dragNoteIndex = noteIdx;
+            if (e.mods.isShiftDown())
             {
-                const juce::ScopedLock sl(clip.lock);
-                auto& notes = clip.getNotes();
-                notes[noteIdx].velocity = yToVelocity(e.y);
+                if (selectedIndices.count(noteIdx) == 0)
+                    selectedIndices.insert(noteIdx);
+            }
+            else
+            {
+                if (selectedIndices.count(noteIdx) == 0)
+                {
+                    selectedIndices.clear();
+                    selectedIndices.insert(noteIdx);
+                }
             }
             repaint();
         }
@@ -277,10 +432,14 @@ void PianoRollContent::mouseDown(const juce::MouseEvent& e)
         const int noteIdx = findNoteAt(e.x, e.y);
         if (noteIdx >= 0)
         {
-            const juce::ScopedLock sl(clip.lock);
-            clip.removeNote(noteIdx);
+            {
+                const juce::ScopedLock sl(clip.lock);
+                clip.beginEdit();
+                clip.removeNote(noteIdx);
+            }
+            revalidateSelection();
+            repaint();
         }
-        repaint();
         return;
     }
 
@@ -295,6 +454,7 @@ void PianoRollContent::mouseDown(const juce::MouseEvent& e)
             const auto& n = clip.getNotes()[noteIdx];
             dragOrigStart = n.startBeat;
             dragOrigLength = n.lengthBeats;
+            savedSelectionOnDragStart = selectedIndices;
         }
         else
         {
@@ -305,21 +465,29 @@ void PianoRollContent::mouseDown(const juce::MouseEvent& e)
             dragOrigStart = n.startBeat;
             dragOrigLength = n.lengthBeats;
             dragOrigPitch = n.pitch;
+
+            if (e.mods.isShiftDown())
+            {
+                if (selectedIndices.count(noteIdx) == 0)
+                    selectedIndices.insert(noteIdx);
+            }
+            else if (selectedIndices.count(noteIdx) == 0)
+            {
+                selectedIndices.clear();
+                selectedIndices.insert(noteIdx);
+            }
+            savedSelectionOnDragStart = selectedIndices;
             startAudition(n.pitch);
         }
         dragStartBeat = xToBeat(e.x);
-        dragStartY = e.y;
     }
     else
     {
-        const int pitch = yToPitch(e.y);
-        const double beat = snapBeat(xToBeat(e.x));
-        creatingNote = true;
-        tempPitch = pitch;
-        tempStart = beat;
-        tempLength = owner.getSnapBeats();
-        dragMode = DragMode::creating;
-        startAudition(pitch);
+        dragMode = DragMode::marquee;
+        marqueeX0 = e.x; marqueeY0 = e.y;
+        marqueeX1 = e.x; marqueeY1 = e.y;
+        if (! e.mods.isShiftDown())
+            selectedIndices.clear();
     }
 
     repaint();
@@ -327,13 +495,34 @@ void PianoRollContent::mouseDown(const juce::MouseEvent& e)
 
 void PianoRollContent::mouseDrag(const juce::MouseEvent& e)
 {
+    if (dragMode == DragMode::marquee)
+    {
+        marqueeX1 = e.x;
+        marqueeY1 = e.y;
+        updateSelectionFromDragRect();
+        repaint();
+        return;
+    }
+
     if (dragMode == DragMode::creating)
     {
         const double currentBeat = snapBeat(xToBeat(e.x));
         tempLength = std::max(owner.getSnapBeats(), currentBeat - tempStart);
         repaint();
+        return;
     }
-    else if (dragMode == DragMode::moving)
+
+    if (dragMode == DragMode::moving || dragMode == DragMode::resizing)
+    {
+        if (! dragStatePushed)
+        {
+            const juce::ScopedLock sl(clip.lock);
+            clip.beginEdit();
+            dragStatePushed = true;
+        }
+    }
+
+    if (dragMode == DragMode::moving)
     {
         const double deltaBeats = xToBeat(e.x) - dragStartBeat;
         const int deltaPitch = (e.y - dragStartY) / owner.getRowHeight();
@@ -351,10 +540,23 @@ void PianoRollContent::mouseDrag(const juce::MouseEvent& e)
         {
             const juce::ScopedLock sl(clip.lock);
             auto& notes = clip.getNotes();
-            if (dragNoteIndex >= 0 && dragNoteIndex < (int) notes.size())
+            const double dBeats = newStart - dragOrigStart;
+            const int dPitch = newPitch - dragOrigPitch;
+            for (int idx : savedSelectionOnDragStart)
             {
-                notes[dragNoteIndex].startBeat = newStart;
-                notes[dragNoteIndex].pitch = newPitch;
+                if (idx < 0 || idx >= (int) notes.size()) continue;
+                if (idx == dragNoteIndex)
+                {
+                    notes[idx].startBeat = newStart;
+                    notes[idx].pitch = newPitch;
+                }
+                else
+                {
+                    const double s = std::max(0.0, notes[idx].startBeat + dBeats);
+                    const int p = juce::jlimit(0, 127, notes[idx].pitch + dPitch);
+                    notes[idx].startBeat = s;
+                    notes[idx].pitch = p;
+                }
             }
         }
         repaint();
@@ -384,23 +586,41 @@ void PianoRollContent::mouseDrag(const juce::MouseEvent& e)
     }
 }
 
+void PianoRollContent::mouseMove(const juce::MouseEvent&) {}
+
 void PianoRollContent::mouseUp(const juce::MouseEvent& e)
 {
     if (dragMode == DragMode::creating && creatingNote)
     {
-        const juce::ScopedLock sl(clip.lock);
-        MidiNote n;
-        n.pitch = tempPitch;
-        n.startBeat = tempStart;
-        n.lengthBeats = tempLength;
-        n.velocity = 80;
-        clip.addNote(n);
+        {
+            const juce::ScopedLock sl(clip.lock);
+            clip.beginEdit();
+            MidiNote n;
+            n.pitch = tempPitch;
+            n.startBeat = tempStart;
+            n.lengthBeats = tempLength;
+            n.velocity = 80;
+            clip.addNote(n);
+        }
         creatingNote = false;
+    }
+    else if (dragMode == DragMode::marquee)
+    {
+        updateSelectionFromDragRect();
+    }
+    else if ((dragMode == DragMode::moving || dragMode == DragMode::resizing) && ! dragStatePushed)
+    {
+    }
+    else if (dragMode == DragMode::velocity && ! dragStatePushed)
+    {
     }
 
     stopAudition();
     dragMode = DragMode::none;
     dragNoteIndex = -1;
+    dragStatePushed = false;
+    savedSelectionOnDragStart.clear();
+    revalidateSelection();
     repaint();
     (void) e;
 }
@@ -408,6 +628,8 @@ void PianoRollContent::mouseUp(const juce::MouseEvent& e)
 PianoRollComponent::PianoRollComponent(MidiTrack& track, juce::MidiKeyboardState& keys)
     : midiTrack(track), clip(track.getClip()), keyboardState(keys)
 {
+    setWantsKeyboardFocus(true);
+
     addAndMakeVisible(snapComboBox);
     snapComboBox.addItem("1/4", 1);
     snapComboBox.addItem("1/8", 2);
@@ -444,12 +666,33 @@ PianoRollComponent::PianoRollComponent(MidiTrack& track, juce::MidiKeyboardState
                              content->getHeight());
     };
 
+    addAndMakeVisible(undoButton);
+    undoButton.onClick = [this] { undo(); };
+
+    addAndMakeVisible(redoButton);
+    redoButton.onClick = [this] { redo(); };
+
+    addAndMakeVisible(copyButton);
+    copyButton.onClick = [this]
+    {
+        if (content) content->copySelection();
+    };
+
+    addAndMakeVisible(pasteButton);
+    pasteButton.onClick = [this]
+    {
+        if (content) content->pasteAt(content->getPasteBeatHint());
+    };
+
     addAndMakeVisible(clearButton);
     clearButton.onClick = [this]
     {
-        const juce::ScopedLock sl(clip.lock);
-        clip.clearNotes();
-        if (content != nullptr) content->repaint();
+        {
+            const juce::ScopedLock sl(clip.lock);
+            clip.clearNotes();
+        }
+        if (content) content->clearSelection();
+        if (content) content->repaint();
     };
 
     addAndMakeVisible(infoLabel);
@@ -466,6 +709,16 @@ PianoRollComponent::PianoRollComponent(MidiTrack& track, juce::MidiKeyboardState
     startTimerHz(30);
 }
 
+PianoRollComponent::~PianoRollComponent()
+{
+    stopTimer();
+}
+
+void PianoRollComponent::grabKeyboardFocusNow()
+{
+    grabKeyboardFocus();
+}
+
 void PianoRollComponent::timerCallback()
 {
     const double beat = midiTrack.getCurrentBeat();
@@ -474,8 +727,11 @@ void PianoRollComponent::timerCallback()
         playheadBeat = beat;
         if (content != nullptr) content->repaint();
     }
+    juce::String selStr;
+    if (content && content->hasSelection())
+        selStr = "  |  " + juce::String(content->getNumSelected()) + " selected";
     infoLabel.setText(juce::String(clip.getLengthBeats(), 1) + " beats  |  " +
-                      juce::String((int) beatWidth) + " px/beat",
+                      juce::String((int) beatWidth) + " px/beat" + selStr,
                       juce::dontSendNotification);
 }
 
@@ -538,9 +794,15 @@ void PianoRollComponent::resized()
     zoomOutButton.setBounds(toolbarArea.removeFromLeft(28).reduced(2, 4));
     zoomInButton.setBounds(toolbarArea.removeFromLeft(28).reduced(2, 4));
     toolbarArea.removeFromLeft(8);
-    clearButton.setBounds(toolbarArea.removeFromLeft(60).reduced(2, 4));
+    undoButton.setBounds(toolbarArea.removeFromLeft(48).reduced(2, 4));
+    redoButton.setBounds(toolbarArea.removeFromLeft(48).reduced(2, 4));
+    toolbarArea.removeFromLeft(4);
+    copyButton.setBounds(toolbarArea.removeFromLeft(48).reduced(2, 4));
+    pasteButton.setBounds(toolbarArea.removeFromLeft(48).reduced(2, 4));
     toolbarArea.removeFromLeft(8);
-    infoLabel.setBounds(toolbarArea.removeFromLeft(220).reduced(0, 4));
+    clearButton.setBounds(toolbarArea.removeFromLeft(50).reduced(2, 4));
+    toolbarArea.removeFromLeft(8);
+    infoLabel.setBounds(toolbarArea.removeFromLeft(240).reduced(0, 4));
 
     area.removeFromLeft(keyWidth);
     viewport.setBounds(area);
@@ -548,6 +810,57 @@ void PianoRollComponent::resized()
     if (content != nullptr)
         content->setSize(juce::roundToInt(clip.getLengthBeats() * beatWidth),
                          numPitches * rowHeight + velocityLaneHeight);
+}
+
+void PianoRollComponent::undo()
+{
+    {
+        const juce::ScopedLock sl(clip.lock);
+        clip.undo();
+    }
+    if (content) content->clearSelection();
+    if (content) content->repaint();
+}
+
+void PianoRollComponent::redo()
+{
+    {
+        const juce::ScopedLock sl(clip.lock);
+        clip.redo();
+    }
+    if (content) content->clearSelection();
+    if (content) content->repaint();
+}
+
+bool PianoRollComponent::keyPressed(const juce::KeyPress& key)
+{
+    if (key.isKeyCode(juce::KeyPress::deleteKey) || key.isKeyCode(juce::KeyPress::backspaceKey))
+    {
+        if (content && content->hasSelection()) { content->deleteSelection(); return true; }
+    }
+    if (key.getModifiers().isCtrlDown() || key.getModifiers().isCommandDown())
+    {
+        const auto c = key.getKeyCode();
+        if (c == (juce::juce_wchar) 'Z' || c == (juce::juce_wchar) 'z')
+        {
+            if (key.getModifiers().isShiftDown()) { redo(); return true; }
+            undo(); return true;
+        }
+        if (c == (juce::juce_wchar) 'Y' || c == (juce::juce_wchar) 'y') { redo(); return true; }
+        if (c == (juce::juce_wchar) 'C' || c == (juce::juce_wchar) 'c') { if (content) content->copySelection(); return true; }
+        if (c == (juce::juce_wchar) 'V' || c == (juce::juce_wchar) 'v') { if (content) content->pasteAt(content->getPasteBeatHint()); return true; }
+        if (c == (juce::juce_wchar) 'X' || c == (juce::juce_wchar) 'x') { if (content) content->cutSelection(); return true; }
+        if (c == (juce::juce_wchar) 'A' || c == (juce::juce_wchar) 'a') { if (content) content->selectAll(); if (content) content->repaint(); return true; }
+    }
+    if (content && content->hasSelection())
+    {
+        const auto c = key.getKeyCode();
+        if (c == (juce::juce_wchar) juce::KeyPress::upKey)    { content->nudgeSelected(1, 0.0);  return true; }
+        if (c == (juce::juce_wchar) juce::KeyPress::downKey)  { content->nudgeSelected(-1, 0.0); return true; }
+        if (c == (juce::juce_wchar) juce::KeyPress::rightKey) { content->nudgeSelected(0, snapBeats); return true; }
+        if (c == (juce::juce_wchar) juce::KeyPress::leftKey)  { content->nudgeSelected(0, -snapBeats); return true; }
+    }
+    return false;
 }
 
 void PianoRollComponent::mouseDown(const juce::MouseEvent& e)
@@ -571,4 +884,13 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent& e)
         auditionPitch = -1;
     }
     (void) e;
+}
+
+void PianoRollComponent::mouseExit(const juce::MouseEvent& e)
+{
+    if (auditionPitch >= 0 && e.originalComponent == this)
+    {
+        keyboardState.noteOff(1, auditionPitch, 0.8f);
+        auditionPitch = -1;
+    }
 }

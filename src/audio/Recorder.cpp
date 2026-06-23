@@ -56,6 +56,10 @@ juce::String Recorder::stopRecording()
     if (recordBufferLength == 0 || recordBuffer.getNumChannels() == 0)
         return {};
 
+    const double sr = recordSampleRate > 0.0 ? recordSampleRate : 48000.0;
+    if (recordSampleRate <= 0.0)
+        recordSampleRate = sr;
+
     const juce::String filename = "simple-daw-recording-" +
         juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S") + ".wav";
     juce::File outDir(juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
@@ -67,7 +71,7 @@ juce::String Recorder::stopRecording()
     std::unique_ptr<juce::FileOutputStream> stream(outFile.createOutputStream());
     if (stream == nullptr) return {};
 
-    auto* rawWriter = wavFormat.createWriterFor(stream.get(), recordSampleRate,
+    auto* rawWriter = wavFormat.createWriterFor(stream.get(), sr,
         (unsigned int) recordBuffer.getNumChannels(), 16, {}, 0);
     if (rawWriter == nullptr) return {};
 

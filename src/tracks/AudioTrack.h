@@ -7,11 +7,16 @@ class AudioTrack
 {
 public:
     AudioTrack();
+    ~AudioTrack();
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate);
     void releaseResources();
 
     void loadFile(const juce::File& file);
+    void loadFileAsync(const juce::File& file,
+                       std::function<void(bool, const juce::String&)> onComplete = {});
+    bool isLoading() const { return source->isLoading(); }
+    std::shared_ptr<std::atomic<int>> getLifetimeToken() const { return lifetimeToken; }
     void setPlaying(bool shouldPlay);
     void togglePlay();
     void stop();
@@ -51,6 +56,7 @@ public:
 private:
     std::unique_ptr<AudioTrackSource> source;
     juce::AudioBuffer<float> scratchBuffer;
+    std::shared_ptr<std::atomic<int>> lifetimeToken;
 
     std::atomic<float> gain{1.0f};
     std::atomic<float> pan{0.0f};
