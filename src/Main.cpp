@@ -7,6 +7,7 @@
 #include "ui/PianoRollComponent.h"
 #include "ui/PeakMeterComponent.h"
 #include "ui/SettingsWindow.h"
+#include "audio/Recorder.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
@@ -69,6 +70,12 @@ public:
         addAndMakeVisible(loadButton);
         loadButton.setButtonText("Load");
         loadButton.onClick = [this] { loadSession(); };
+
+        addAndMakeVisible(recordButton);
+        recordButton.setButtonText("Rec");
+        recordButton.setClickingTogglesState(true);
+        recordButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffaa3030));
+        recordButton.onClick = [this] { toggleRecording(); };
 
         addAndMakeVisible(tracksViewport);
         tracksViewport.setViewedComponent(&tracksContainer);
@@ -223,6 +230,8 @@ public:
         pluginHost.setSampleRate(sampleRate);
         pluginHost.setBlockSize(samplesPerBlockExpected);
 
+        deviceManager.addAudioCallback(&recorder);
+
         masterGainSmoothed.reset(sampleRate, 0.05);
         masterGainSmoothed.setCurrentAndTargetValue(masterGainTarget.load());
 
@@ -286,6 +295,7 @@ public:
 
     void releaseResources() override
     {
+        deviceManager.removeAudioCallback(&recorder);
         synthSource.releaseResources();
         midiTrack.releaseResources();
         for (auto& t : tracks)
@@ -536,6 +546,47 @@ private:
         refreshLayout();
     }
 
+    void toggleRecording()
+    {
+        if (recorder.isRecording())
+        {
+            const juce::String path = recorder.stopRecording();
+            recordButton.setToggleState(false, juce::dontSendNotification);
+
+            if (path.isEmpty()) return;
+
+            juce::File file(path);
+            if (! file.existsAsFile()) return;
+
+            double sr = 48000.0;
+            int bs = 512;
+            if (auto* device = deviceManager.getCurrentAudioDevice())
+            {
+                sr = device->getCurrentSampleRate();
+                bs = device->getCurrentBufferSizeSamples();
+            }
+
+            auto track = std::make_unique<AudioTrack>();
+            track->prepareToPlay(bs, sr);
+            track->loadFile(file);
+
+            auto* trackPtr = track.get();
+            auto row = std::make_unique<TrackRow>(*trackPtr, pluginHost,
+                [this](TrackRow* r) { removeTrack(r); },
+                [this] { refreshLayout(); });
+            row->setNameText(track->getSource().getLoadedFileName());
+
+            tracks.push_back(std::move(track));
+            trackRows.push_back(std::move(row));
+            tracksContainer.addAndMakeVisible(trackRows.back().get());
+            refreshLayout();
+        }
+        else
+        {
+            recorder.startRecording();
+        }
+    }
+
     void refreshLayout()
     {
         auto area = getLocalBounds().reduced(12);
@@ -562,6 +613,8 @@ private:
         saveButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
         topRow.removeFromLeft(4);
         loadButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
+        topRow.removeFromLeft(4);
+        recordButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
         area.removeFromTop(6);
 
         auto seqRow = area.removeFromTop(28);
@@ -660,6 +713,7 @@ private:
 
     SynthAudioSource synthSource;
     MidiTrack midiTrack;
+    Recorder recorder;
     PluginHost pluginHost;
     std::vector<std::unique_ptr<AudioTrack>> tracks;
     std::vector<std::unique_ptr<TrackRow>> trackRows;
@@ -672,6 +726,7 @@ private:
     juce::TextButton settingsButton;
     juce::TextButton saveButton;
     juce::TextButton loadButton;
+    juce::TextButton recordButton;
     juce::TextButton seqPlayButton;
     juce::TextButton seqStopButton;
     juce::TextButton seqLoopButton;
