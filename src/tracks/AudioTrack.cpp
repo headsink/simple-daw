@@ -52,11 +52,13 @@ void AudioTrack::setPan(float p)  { pan.store(juce::jlimit(-1.0f, 1.0f, p)); }
 void AudioTrack::setMute(bool m)  { mute.store(m); }
 void AudioTrack::setSolo(bool s)  { solo.store(s); }
 
-void AudioTrack::setPlugin(std::unique_ptr<juce::AudioPluginInstance> p)
+void AudioTrack::setPlugin(std::unique_ptr<juce::AudioPluginInstance> p,
+                           std::unique_ptr<juce::PluginDescription> desc)
 {
     const juce::SpinLock::ScopedLockType sl(pluginLock);
     if (plugin) plugin->releaseResources();
     plugin = std::move(p);
+    pluginDesc = std::move(desc);
     if (plugin)
     {
         plugin->prepareToPlay(currentSampleRate, currentBlockSize);
@@ -72,6 +74,7 @@ void AudioTrack::clearPlugin()
     const juce::SpinLock::ScopedLockType sl(pluginLock);
     if (plugin) plugin->releaseResources();
     plugin.reset();
+    pluginDesc.reset();
     pluginBypass.store(false);
 }
 

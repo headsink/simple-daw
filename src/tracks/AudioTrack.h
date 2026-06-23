@@ -34,10 +34,12 @@ public:
     void setLoopStartFromPlayhead() { source->setLoopStart(source->getPlayPosition()); }
     void setLoopEndFromPlayhead() { source->setLoopEnd(source->getPlayPosition()); }
 
-    void setPlugin(std::unique_ptr<juce::AudioPluginInstance> p);
+    void setPlugin(std::unique_ptr<juce::AudioPluginInstance> p,
+                   std::unique_ptr<juce::PluginDescription> desc);
     void clearPlugin();
     bool hasPlugin() const { return plugin != nullptr; }
     juce::AudioPluginInstance* getPlugin() const { return plugin.get(); }
+    const juce::PluginDescription* getPluginDesc() const { return pluginDesc.get(); }
     void setPluginBypass(bool b) { pluginBypass.store(b); }
     bool isPluginBypassed() const { return pluginBypass.load(); }
     juce::String getPluginName() const;
@@ -67,6 +69,7 @@ private:
     std::atomic<float> peak{0.0f};
 
     std::unique_ptr<juce::AudioPluginInstance> plugin;
+    std::unique_ptr<juce::PluginDescription> pluginDesc;
     std::atomic<bool> pluginBypass{false};
     juce::MidiBuffer pluginMidiBuffer;
     juce::SpinLock pluginLock;

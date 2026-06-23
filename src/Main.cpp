@@ -504,6 +504,25 @@ private:
             tObj->setProperty("looping", t->getSource().isLooping());
             tObj->setProperty("loopStart", t->getLoopStart());
             tObj->setProperty("loopEnd", t->getLoopEnd());
+
+            if (t->hasPlugin() && t->getPluginDesc() != nullptr && t->getPlugin() != nullptr)
+            {
+                const auto* desc = t->getPluginDesc();
+                auto* pObj = new juce::DynamicObject();
+                pObj->setProperty("identifier", desc->createIdentifierString());
+                pObj->setProperty("name", desc->name);
+                pObj->setProperty("manufacturer", desc->manufacturerName);
+                pObj->setProperty("format", desc->pluginFormatName);
+                pObj->setProperty("bypass", t->isPluginBypassed());
+
+                juce::MemoryBlock stateBlock;
+                t->getPlugin()->getStateInformation(stateBlock);
+                pObj->setProperty("state",
+                    juce::Base64::toBase64(stateBlock.getData(), stateBlock.getSize()));
+
+                tObj->setProperty("plugin", juce::var(pObj));
+            }
+
             tracksArray.add(juce::var(tObj));
         }
         obj->setProperty("tracks", tracksArray);
@@ -622,6 +641,16 @@ private:
                 track->setLoopStart((int)(double) tObj->getProperty("loopStart"));
                 track->setLoopEnd((int)(double) tObj->getProperty("loopEnd"));
 
+                juce::String pluginIdentifier;
+                juce::String pluginStateB64;
+                bool pluginBypass = false;
+                if (auto* pObj = tObj->getProperty("plugin").getDynamicObject())
+                {
+                    pluginIdentifier = pObj->getProperty("identifier").toString();
+                    pluginStateB64 = pObj->getProperty("state").toString();
+                    pluginBypass = (bool) pObj->getProperty("bypass");
+                }
+
                 auto token = track->getLifetimeToken();
                 const int myVersion = token->load();
 
@@ -639,6 +668,63 @@ private:
                 tracksContainer.addAndMakeVisible(rowPtr);
 
                 AudioTrack* trackRaw = tracks.back().get();
+
+                if (pluginIdentifier.isNotEmpty())
+                {
+                    juce::PluginDescription matchDesc;
+                    bool found = false;
+                    for (const auto& t : pluginHost.getKnownList().getTypes())
+                    {
+                        if (t.createIdentifierString() == pluginIdentifier)
+                        {
+                            matchDesc = t;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found)
+                    {
+                        const juce::String stateB64 = pluginStateB64;
+                        const bool bypass = pluginBypass;
+                        const juce::String ident = pluginIdentifier;
+                        const int tVersion = myVersion;
+                        const std::shared_ptr<std::atomic<int>> tToken = token;
+
+                        pluginHost.createInstanceAsync(matchDesc,
+                            [this, rowPtr, tToken, tVersion, stateB64, bypass, ident]
+                            (std::unique_ptr<juce::AudioPluginInstance> inst, const juce::String& err)
+                            {
+                                if (tToken->load() != tVersion) return;
+                                if (rowPtr == nullptr) return;
+                                if (! inst) return;
+                                if (stateB64.isNotEmpty())
+                                {
+                                    juce::MemoryOutputStream decoded;
+                                    juce::Base64::convertFromBase64(decoded, stateB64);
+                                    decoded.flush();
+                                    if (decoded.getDataSize() > 0)
+                                        inst->setStateInformation(decoded.getData(),
+                                                                   (int) decoded.getDataSize());
+                                }
+                                auto descCopy = std::make_unique<juce::PluginDescription>();
+                                for (const auto& t : pluginHost.getKnownList().getTypes())
+                                {
+                                    if (t.createIdentifierString() == ident) { *descCopy = t; break; }
+                                }
+                                rowPtr->getTrack().setPlugin(std::move(inst), std::move(descCopy));
+                                rowPtr->getTrack().setPluginBypass(bypass);
+                                juce::MessageManager::getInstance()->callAsync(
+                                    [this, rowPtr, tToken, tVersion]
+                                    {
+                                        if (tToken->load() != tVersion) return;
+                                        if (rowPtr == nullptr) return;
+                                        rowPtr->refreshPluginLabel();
+                                        rowPtr->updateButtons();
+                                    });
+                            });
+                    }
+                }
+
                 trackRaw->loadFileAsync(audioFile,
                     [this, rowPtr, token, myVersion](bool ok, const juce::String& err)
                     {

@@ -386,13 +386,14 @@ void TrackRow::openPluginChooser()
         [this, aliveFlag](const juce::PluginDescription& desc)
         {
             pluginHost.createInstanceAsync(desc,
-                [this, aliveFlag](std::unique_ptr<juce::AudioPluginInstance> inst, const juce::String& err)
+                [this, aliveFlag, desc](std::unique_ptr<juce::AudioPluginInstance> inst, const juce::String& err)
                 {
                     if (! *aliveFlag) return;
                     if (inst)
                     {
                         if (editorWindow != nullptr) { delete editorWindow; editorWindow = nullptr; }
-                        track.setPlugin(std::move(inst));
+                        auto descCopy = std::make_unique<juce::PluginDescription>(desc);
+                        track.setPlugin(std::move(inst), std::move(descCopy));
                         juce::MessageManager::getInstance()->callAsync(
                             [this, aliveFlag] {
                                 if (! *aliveFlag) return;
