@@ -163,8 +163,12 @@ public:
 
     void closeButtonPressed() override
     {
-        if (onClosed) onClosed();
-        delete this;
+        juce::MessageManager::getInstance()->callAsync(
+            [cb = onClosed, w = this]
+            {
+                if (cb) cb();
+                delete w;
+            });
     }
 
 private:

@@ -8,6 +8,7 @@ AudioTrack::AudioTrack()
 
 AudioTrack::~AudioTrack()
 {
+    releaseResources();
     if (lifetimeToken)
         lifetimeToken->fetch_add(1);
 }
@@ -19,6 +20,9 @@ void AudioTrack::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 
     source->prepareToPlay(samplesPerBlockExpected, sampleRate);
     scratchBuffer.setSize(2, samplesPerBlockExpected);
+
+    gainSmoothed.reset(currentSampleRate, 0.05);
+    gainSmoothed.setCurrentAndTargetValue(gain.load());
 
     if (plugin)
     {
@@ -47,7 +51,12 @@ void AudioTrack::setPlaying(bool shouldPlay) { source->setPlaying(shouldPlay); }
 void AudioTrack::togglePlay() { source->togglePlay(); }
 void AudioTrack::stop() { source->stop(); }
 
-void AudioTrack::setGain(float g) { gain.store(juce::jlimit(0.0f, 2.0f, g)); }
+void AudioTrack::setGain(float g)
+{
+    const float clamped = juce::jlimit(0.0f, 2.0f, g);
+    gain.store(clamped);
+    gainSmoothed.setTargetValue(clamped);
+}
 void AudioTrack::setPan(float p)  { pan.store(juce::jlimit(-1.0f, 1.0f, p)); }
 void AudioTrack::setMute(bool m)  { mute.store(m); }
 void AudioTrack::setSolo(bool s)  { solo.store(s); }
@@ -104,15 +113,18 @@ void AudioTrack::renderInto(juce::AudioBuffer<float>& dest, int startSample, int
         }
     }
 
-    const float g = gain.load();
     const float p = pan.load();
     const int destChans = dest.getNumChannels();
     const int srcChans = scratchBuffer.getNumChannels();
 
-    if (g != 1.0f)
+    const float startG = gainSmoothed.getCurrentValue();
+    gainSmoothed.skip(numSamples);
+    const float endG = gainSmoothed.getCurrentValue();
+
+    if (startG != 1.0f || endG != 1.0f)
     {
         for (int ch = 0; ch < srcChans; ++ch)
-            scratchBuffer.applyGain(ch, 0, numSamples, g);
+            scratchBuffer.applyGainRamp(ch, 0, numSamples, startG, endG);
     }
 
     float blockPeak = 0.0f;

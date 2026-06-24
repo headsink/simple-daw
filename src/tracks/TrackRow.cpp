@@ -198,10 +198,66 @@ TrackRow::TrackRow(AudioTrack& t, PluginHost& host,
 
 void TrackRow::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xff252525));
+    g.setColour(dragHighlight ? juce::Colour(0xff3050a0) : juce::Colour(0xff252525));
     g.fillRect(getLocalBounds());
     g.setColour(juce::Colour(0xff404040));
     g.drawLine(0.0f, 0.0f, (float)getWidth(), 0.0f, 1.0f);
+    g.drawLine(0.0f, (float)getHeight(), (float)getWidth(), (float)getHeight(), 1.0f);
+}
+
+static bool isAudioFile(const juce::String& path)
+{
+    static const char* exts[] = { ".wav", ".aif", ".aiff", ".flac", ".mp3", ".ogg", nullptr };
+    for (int i = 0; exts[i] != nullptr; ++i)
+        if (path.endsWithIgnoreCase(exts[i])) return true;
+    return false;
+}
+
+bool TrackRow::isInterestedInFileDrag(const juce::StringArray& files)
+{
+    for (const auto& f : files)
+        if (isAudioFile(f)) return true;
+    return false;
+}
+
+void TrackRow::fileDragEnter(const juce::StringArray& /*files*/, int /*x*/, int /*y*/)
+{
+    dragHighlight = true;
+    repaint();
+}
+
+void TrackRow::fileDragExit(const juce::StringArray& /*files*/)
+{
+    dragHighlight = false;
+    repaint();
+}
+
+void TrackRow::filesDropped(const juce::StringArray& files, int /*x*/, int /*y*/)
+{
+    dragHighlight = false;
+    repaint();
+    for (const auto& f : files)
+    {
+        if (! isAudioFile(f)) continue;
+        juce::File file(f);
+        if (! file.existsAsFile()) continue;
+        track.loadFileAsync(file,
+            [this, aliveFlag = alive](bool ok, const juce::String& err)
+            {
+                juce::MessageManager::getInstance()->callAsync(
+                    [this, aliveFlag, ok, err]
+                    {
+                        if (! *aliveFlag) return;
+                        if (ok)
+                            nameLabel.setText(track.getSource().getLoadedFileName(), juce::dontSendNotification);
+                        else
+                            nameLabel.setText("(failed: " + err + ")", juce::dontSendNotification);
+                        refreshTimeLabel();
+                        updateButtons();
+                    });
+            });
+        break;
+    }
 }
 
 void TrackRow::resized()

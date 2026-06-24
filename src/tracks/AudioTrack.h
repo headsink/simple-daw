@@ -67,6 +67,7 @@ private:
     std::atomic<bool> mute{false};
     std::atomic<bool> solo{false};
     std::atomic<float> peak{0.0f};
+    juce::SmoothedValue<float> gainSmoothed{1.0f};
 
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     std::unique_ptr<juce::PluginDescription> pluginDesc;

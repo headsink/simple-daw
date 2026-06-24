@@ -56,8 +56,9 @@ public:
         {
             if (settingsWindow == nullptr)
             {
+                auto aliveFlag = alive;
                 settingsWindow = new SettingsWindow(deviceManager,
-                    [this] { settingsWindow = nullptr; });
+                    [this, aliveFlag] { if (*aliveFlag) settingsWindow = nullptr; });
             }
             else
             {
@@ -149,8 +150,9 @@ public:
         {
             if (pianoRollWindow == nullptr)
             {
+                auto aliveFlag = alive;
                 pianoRollWindow = new PianoRollWindow(midiTrack, synthSource.keyboardState,
-                    [this] { pianoRollWindow = nullptr; });
+                    [this, aliveFlag] { if (*aliveFlag) pianoRollWindow = nullptr; });
             }
             else
             {
@@ -224,11 +226,15 @@ public:
         refreshLayout();
         updateSeqButtons();
 
+        setWantsKeyboardFocus(true);
+        grabKeyboardFocus();
+
         startTimer(500);
     }
 
     ~MainComponent() override
     {
+        *alive = false;
         stopTimer();
         closeAllMidiInputs();
         midiOutputRouter.sendAllNotesOff();
@@ -363,6 +369,24 @@ public:
         refreshLayout();
     }
 
+    bool keyPressed(const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::spaceKey)
+        {
+            if (midiTrack.isPlaying())
+            {
+                midiTrack.stop();
+            }
+            else
+            {
+                midiTrack.play();
+            }
+            updateSeqButtons();
+            return true;
+        }
+        return false;
+    }
+
     void handleIncomingMidiMessage(juce::MidiInput* source, const juce::MidiMessage& message) override
     {
         const juce::String src = source != nullptr ? source->getName() : juce::String("unknown");
@@ -421,6 +445,58 @@ private:
         }
         tracksContainer.addAndMakeVisible(trackRows.back().get());
         refreshLayout();
+    }
+
+    TrackRow* createTrackFromFileAsync(juce::File audioFile, float initialGain)
+    {
+        double sr = 48000.0;
+        int bs = 512;
+        if (auto* device = deviceManager.getCurrentAudioDevice())
+        {
+            sr = device->getCurrentSampleRate();
+            bs = device->getCurrentBufferSizeSamples();
+        }
+
+        auto track = std::make_unique<AudioTrack>();
+        track->prepareToPlay(bs, sr);
+        track->setGain(initialGain);
+
+        auto token = track->getLifetimeToken();
+        const int myVersion = token->load();
+
+        auto row = std::make_unique<TrackRow>(*track, pluginHost,
+            [this](TrackRow* r) { removeTrack(r); },
+            [this] { refreshLayout(); });
+        row->setNameText("(loading...) " + audioFile.getFileName());
+
+        {
+            const juce::SpinLock::ScopedLockType sl(tracksLock);
+            tracks.push_back(std::move(track));
+            trackRows.push_back(std::move(row));
+        }
+        TrackRow* rowPtr = trackRows.back().get();
+        tracksContainer.addAndMakeVisible(rowPtr);
+        AudioTrack* trackRaw = tracks.back().get();
+
+        trackRaw->loadFileAsync(audioFile,
+            [this, rowPtr, token, myVersion](bool ok, const juce::String& err)
+            {
+                juce::MessageManager::getInstance()->callAsync(
+                    [this, rowPtr, token, myVersion, ok, err]
+                    {
+                        if (token->load() != myVersion) return;
+                        if (rowPtr == nullptr) return;
+                        if (ok)
+                            rowPtr->setNameText(rowPtr->getTrack().getSource().getLoadedFileName());
+                        else
+                            rowPtr->setNameText("(failed: " + err + ")");
+                        rowPtr->refreshTimeLabel();
+                        rowPtr->updateButtons();
+                        refreshLayout();
+                    });
+            });
+
+        return rowPtr;
     }
 
     void removeTrack(TrackRow* row)
@@ -567,6 +643,7 @@ private:
 
         {
             const juce::String savedOut = json["midiOutput"].toString();
+            midiOutputRouter.sendAllNotesOff();
             refreshMidiOutputCombo();
             if (savedOut.isNotEmpty() && savedOut != noneOutputEntry)
             {
@@ -577,6 +654,7 @@ private:
             }
             else
             {
+                midiOutputRouter.closeOutput();
                 midiOutputCombo.setText(noneOutputEntry, juce::dontSendNotification);
             }
         }
@@ -631,15 +709,16 @@ private:
                 juce::File audioFile(tObj->getProperty("filePath").toString());
                 if (! audioFile.existsAsFile()) continue;
 
-                auto track = std::make_unique<AudioTrack>();
-                track->prepareToPlay(bs, sr);
-                track->setGain((float)(double) tObj->getProperty("gain"));
-                track->setPan((float)(double) tObj->getProperty("pan"));
-                track->setMute((bool) tObj->getProperty("mute"));
-                track->setSolo((bool) tObj->getProperty("solo"));
-                track->getSource().setLooping((bool) tObj->getProperty("looping"));
-                track->setLoopStart((int)(double) tObj->getProperty("loopStart"));
-                track->setLoopEnd((int)(double) tObj->getProperty("loopEnd"));
+                const float savedGain = (float)(double) tObj->getProperty("gain");
+                TrackRow* rowPtr = createTrackFromFileAsync(audioFile, savedGain);
+                auto& track = rowPtr->getTrack();
+
+                track.setPan((float)(double) tObj->getProperty("pan"));
+                track.setMute((bool) tObj->getProperty("mute"));
+                track.setSolo((bool) tObj->getProperty("solo"));
+                track.getSource().setLooping((bool) tObj->getProperty("looping"));
+                track.setLoopStart((int)(double) tObj->getProperty("loopStart"));
+                track.setLoopEnd((int)(double) tObj->getProperty("loopEnd"));
 
                 juce::String pluginIdentifier;
                 juce::String pluginStateB64;
@@ -650,24 +729,6 @@ private:
                     pluginStateB64 = pObj->getProperty("state").toString();
                     pluginBypass = (bool) pObj->getProperty("bypass");
                 }
-
-                auto token = track->getLifetimeToken();
-                const int myVersion = token->load();
-
-                auto row = std::make_unique<TrackRow>(*track, pluginHost,
-                    [this](TrackRow* r) { removeTrack(r); },
-                    [this] { refreshLayout(); });
-                row->setNameText("(loading...) " + audioFile.getFileName());
-
-                {
-                    const juce::SpinLock::ScopedLockType sl(tracksLock);
-                    tracks.push_back(std::move(track));
-                    trackRows.push_back(std::move(row));
-                }
-                TrackRow* rowPtr = trackRows.back().get();
-                tracksContainer.addAndMakeVisible(rowPtr);
-
-                AudioTrack* trackRaw = tracks.back().get();
 
                 if (pluginIdentifier.isNotEmpty())
                 {
@@ -684,17 +745,17 @@ private:
                     }
                     if (found)
                     {
+                        auto token = track.getLifetimeToken();
+                        const int myVersion = token->load();
                         const juce::String stateB64 = pluginStateB64;
                         const bool bypass = pluginBypass;
                         const juce::String ident = pluginIdentifier;
-                        const int tVersion = myVersion;
-                        const std::shared_ptr<std::atomic<int>> tToken = token;
 
                         pluginHost.createInstanceAsync(matchDesc,
-                            [this, rowPtr, tToken, tVersion, stateB64, bypass, ident]
+                            [this, rowPtr, token, myVersion, stateB64, bypass, ident]
                             (std::unique_ptr<juce::AudioPluginInstance> inst, const juce::String& err)
                             {
-                                if (tToken->load() != tVersion) return;
+                                if (token->load() != myVersion) return;
                                 if (rowPtr == nullptr) return;
                                 if (! inst) return;
                                 if (stateB64.isNotEmpty())
@@ -714,9 +775,9 @@ private:
                                 rowPtr->getTrack().setPlugin(std::move(inst), std::move(descCopy));
                                 rowPtr->getTrack().setPluginBypass(bypass);
                                 juce::MessageManager::getInstance()->callAsync(
-                                    [this, rowPtr, tToken, tVersion]
+                                    [this, rowPtr, token, myVersion]
                                     {
-                                        if (tToken->load() != tVersion) return;
+                                        if (token->load() != myVersion) return;
                                         if (rowPtr == nullptr) return;
                                         rowPtr->refreshPluginLabel();
                                         rowPtr->updateButtons();
@@ -724,28 +785,6 @@ private:
                             });
                     }
                 }
-
-                trackRaw->loadFileAsync(audioFile,
-                    [this, rowPtr, token, myVersion](bool ok, const juce::String& err)
-                    {
-                        juce::MessageManager::getInstance()->callAsync(
-                            [this, rowPtr, token, myVersion, ok, err]
-                            {
-                                if (token->load() != myVersion) return;
-                                if (rowPtr == nullptr) return;
-                                if (ok)
-                                {
-                                    rowPtr->setNameText(rowPtr->getTrack().getSource().getLoadedFileName());
-                                }
-                                else
-                                {
-                                    rowPtr->setNameText("(failed: " + err + ")");
-                                }
-                                rowPtr->refreshTimeLabel();
-                                rowPtr->updateButtons();
-                                refreshLayout();
-                            });
-                    });
             }
         }
 
@@ -764,57 +803,8 @@ private:
             juce::File file(path);
             if (! file.existsAsFile()) return;
 
-            double sr = 48000.0;
-            int bs = 512;
-            if (auto* device = deviceManager.getCurrentAudioDevice())
-            {
-                sr = device->getCurrentSampleRate();
-                bs = device->getCurrentBufferSizeSamples();
-            }
-
-            auto track = std::make_unique<AudioTrack>();
-            track->prepareToPlay(bs, sr);
-            track->setGain(0.6f);
-
-            auto token = track->getLifetimeToken();
-            const int myVersion = token->load();
-
-            auto row = std::make_unique<TrackRow>(*track, pluginHost,
-                [this](TrackRow* r) { removeTrack(r); },
-                [this] { refreshLayout(); });
-            row->setNameText("(loading...) " + file.getFileName());
-
-            {
-                const juce::SpinLock::ScopedLockType sl(tracksLock);
-                tracks.push_back(std::move(track));
-                trackRows.push_back(std::move(row));
-            }
-            TrackRow* rowPtr = trackRows.back().get();
-            tracksContainer.addAndMakeVisible(rowPtr);
-            AudioTrack* trackRaw = tracks.back().get();
+            createTrackFromFileAsync(file, 0.6f);
             refreshLayout();
-
-            trackRaw->loadFileAsync(file,
-                [this, rowPtr, token, myVersion](bool ok, const juce::String& err)
-                {
-                    juce::MessageManager::getInstance()->callAsync(
-                        [this, rowPtr, token, myVersion, ok, err]
-                        {
-                            if (token->load() != myVersion) return;
-                            if (rowPtr == nullptr) return;
-                            if (ok)
-                            {
-                                rowPtr->setNameText(rowPtr->getTrack().getSource().getLoadedFileName());
-                            }
-                            else
-                            {
-                                rowPtr->setNameText("(failed: " + err + ")");
-                            }
-                            rowPtr->refreshTimeLabel();
-                            rowPtr->updateButtons();
-                            refreshLayout();
-                        });
-                });
         }
         else
         {
@@ -1007,6 +997,7 @@ private:
     std::atomic<float> midiGain{0.5f};
     std::atomic<float> masterGainTarget{0.8f};
     juce::SmoothedValue<float> masterGainSmoothed{0.8f};
+    std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 };
 
 class SimpleDawApplication : public juce::JUCEApplication
