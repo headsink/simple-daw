@@ -63,6 +63,15 @@ project targeting Windows 11 with MSVC, but the code itself is portable.
   `juce::SmoothedValue<float>` (50 ms ramp) so slider drags and volume
   changes do not click or zipper.
 
+### Tests
+- **`MidiClip` unit tests** in `tests/MidiClipTests.cpp` (12 subtests, 61
+  expectations). Build with `.\run-tests.bat`. The test binary is a
+  headless console app that links only `juce::juce_core` — no audio,
+  MIDI, or display needed. Runs in <1 s, exits non-zero on any
+  failure. Covers data mutations (add/remove/clear/replace), undo/redo
+  round-trip, the 200-snapshot cap, the `tryLock` snapshot pattern
+  used by the audio thread, and the `beginEdit` manual-push API.
+
 ## Stack
 
 | Layer | Choice |
@@ -149,6 +158,7 @@ From PowerShell:
 ```powershell
 .\build-dev.bat            # Debug build (default, ~28 MB exe)
 .\build-dev.bat Release    # Release build (~7 MB exe)
+.\run-tests.bat            # Build + run MidiClip unit tests
 ```
 
 `build-dev.bat` initializes `VsDevCmd.bat`, then runs CMake configure + build.
@@ -194,7 +204,6 @@ recording, save/load, MIDI output routing) is complete. Remaining
 polish items:
 
 - App icon via `juce_add_app_icon` (drop a `.ico` in `resources/`)
-- Tiny test harness for `MidiClip` undo/redo
 
 ## License
 

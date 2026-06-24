@@ -164,6 +164,7 @@
 cd "C:\Users\User\OneDrive\2026\Viibe Codng Stuff\simple-daw"
 .\build-dev.bat           # Debug build (default)
 .\build-dev.bat Release   # Release build
+.\run-tests.bat           # Build + run MidiClip unit tests
 ```
 
 Output: `build\SimpleDaw_artefacts\<Config>\Simple DAW.exe`
@@ -181,7 +182,7 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 **Recommended next: pick a stretch task.** Core DAW is functional: multi-track audio + VST3 inserts + A/B loop + sequencer + piano roll (selection, clipboard, undo/redo, velocity lane, zoom, scroll) + master meter + ASIO settings + JSON save/load + recording + MIDI output routing + per-track gain smoothing + file drag-and-drop + spacebar transport + track reorder via drag. Remaining items are polish.
 
 ### Stretch tasks (pick any)
-- **Release build** benchmark.
+- **Release build** benchmark. (done — Debug 27.9 MB, Release 7.2 MB)
 - **App icon** via `juce_add_app_icon` or manual `.ico`.
 
 ### Other stretch tasks (pick any)
@@ -195,7 +196,8 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 - **Per-track gain smoothing** — `SmoothedValue<float>` per track, sample-accurate ramp on slider drag. (done — listed for reference)
 - **Spacebar = play/stop sequencer** — `MainComponent::keyPressed` toggles play. (done — listed for reference)
 - **Drag-and-drop audio files onto a track row** — `juce::FileDragAndDropTarget` on `TrackRow`. (done — listed for reference)
-- **Release build** benchmark.
+- **Tiny test harness for `MidiClip`** — `juce::UnitTest`-based, 12 subtests, 61 expectations. Builds as a separate `SimpleDawTests` console app linked only against `juce::juce_core` (no audio / GUI / MIDI modules), runs in <1 s on any machine. Run with `.\run-tests.bat`. Covers: default demo melody, addNote/addNotes (empty no-op), removeNote (OOB no-op), removeNotes (re-indexing), undo/redo round-trip, redo-stack clearing on new mutation, clearUndoHistory, replaceAllNotes, undo cap of 200, atomic lengthBeats, startBeat/id, beginEdit, and the audio-thread `tryLock` snapshot pattern. Required `MidiClip.h` to include `<juce_core/juce_core.h>` instead of `<JuceHeader.h>`.
+- **Release build** benchmark. (done — Debug 27.9 MB, Release 7.2 MB)
 - **App icon** via `juce_add_app_icon` or manual `.ico`.
 
 ### Known issues (all fixed in the latest session)
@@ -296,6 +298,8 @@ simple-daw/
 │   ├── session/
 │   │   ├── SessionIO.h          ✓ Save/load/recording helper
 │   │   └── SessionIO.cpp        ✓
+├── tests/
+│   └── MidiClipTests.cpp    ✓ juce::UnitTest harness for MidiClip (data + undo/redo)
 ├── third_party/
 │   └── JUCE/                   ✓ cloned
 ├── docs/
@@ -333,7 +337,7 @@ simple-daw/
 22. ✓ **Drag-and-drop audio files onto a track row** (FileDragAndDropTarget on TrackRow)
 23. ✓ **Track reorder via drag** (DragAndDropContainer on MainComponent, DragAndDropTarget on TrackRow)
 
-**All core + selected stretch features complete. Remaining items:** Release build, app icon.
+**All core + selected stretch features complete. Remaining items:** App icon.
 
 ---
 

@@ -56,6 +56,30 @@ target_link_libraries(SimpleDaw
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
+# ---- Unit tests --------------------------------------------------------------
+# Headless console app that runs juce::UnitTest-based tests. Currently covers
+# MidiClip (data model + undo/redo). Does NOT link audio / GUI / MIDI modules,
+# so it builds fast and runs without any audio device or MIDI hardware.
+juce_add_console_app(SimpleDawTests
+    PRODUCT_NAME "SimpleDawTests"
+    COMPANY_NAME "Viibe"
+    VERSION "${PROJECT_VERSION}"
+)
+
+target_sources(SimpleDawTests PRIVATE
+    tests/MidiClipTests.cpp
+    src/midi/MidiClip.cpp
+)
+
+target_include_directories(SimpleDawTests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(SimpleDawTests
+    PRIVATE
+        juce::juce_core
+)
+
 # juce_add_binary_data() goes here once we ship icons, fonts, or sample files.
 # Example:
 #   juce_add_binary_data(SimpleDaw_Assets
