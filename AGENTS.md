@@ -153,7 +153,7 @@
 | vcvars64 | `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat` |
 | cl.exe | `C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\cl.exe` |
 | CMake | `C:\Program Files\CMake\bin\cmake.exe` |
-| JUCE | `third_party/JUCE/` (depth-1 clone, master branch) |
+| JUCE | `third_party/JUCE/` (depth-1 clone, **pinned** to `3ba67d4` — see `third_party/JUCE.commit` and `docs/juce-pinning.md`) |
 | Audio device | Komplete Audio 1 (Native Instruments) via Komplete Audio Driver (ASIO) |
 
 ---

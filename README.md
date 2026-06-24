@@ -86,6 +86,7 @@ simple-daw/
 ├── README.md                 This file
 ├── docs/
 │   ├── daw-architecture.md            High-level architecture and data flow
+│   ├── juce-pinning.md                How to restore / upgrade the pinned JUCE
 │   ├── learning-plan-week-0-2-3.md    Week-by-week learning log
 │   └── learning-plan-juce-dsp.md      DSP learning plan
 ├── src/
@@ -116,7 +117,9 @@ simple-daw/
 │   │   └── TransportBar.{h,cpp}       Top row + status label (callback-driven)
 │   └── session/
 │       └── SessionIO.{h,cpp}          .sdaw save/load + recording helper
-├── third_party/JUCE/        gitignored, depth-1 clone
+├── third_party/
+│   ├── JUCE/                 gitignored, depth-1 clone (see JUCE.commit)
+│   └── JUCE.commit           Pinned JUCE SHA (1 line of git output)
 └── build/                   gitignored
 ```
 
@@ -127,9 +130,16 @@ simple-daw/
 - Visual Studio 2022 (MSVC v143, C++20) with the Windows 11 SDK
 - CMake 3.22+ (winget: `C:\Program Files\CMake\bin\cmake.exe`)
 - Git
-- JUCE 8 cloned at `third_party/JUCE/` (depth 1, `master` branch):
+- JUCE 8 cloned at `third_party/JUCE/` and checked out to the commit
+  pinned in `third_party/JUCE.commit` (currently `3ba67d4`).
+  See [docs/juce-pinning.md](docs/juce-pinning.md) for restore / upgrade
+  steps:
   ```powershell
-  git clone --depth 1 https://github.com/juce-framework/JUCE.git third_party/JUCE
+  git clone https://github.com/juce-framework/JUCE.git third_party/JUCE
+  cd third_party/JUCE
+  git fetch --unshallow
+  git checkout 3ba67d4585e9d1fbcdb26a877c7978608b1f802e
+  cd ..\..
   ```
 
 ### Build commands
@@ -184,7 +194,6 @@ recording, save/load, MIDI output routing) is complete. Remaining
 polish items:
 
 - App icon via `juce_add_app_icon` (drop a `.ico` in `resources/`)
-- Pin JUCE to a commit hash for reproducible builds
 - Tiny test harness for `MidiClip` undo/redo
 
 ## License
