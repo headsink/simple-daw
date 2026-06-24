@@ -13,9 +13,11 @@ TrackRow::~TrackRow()
 
 TrackRow::TrackRow(AudioTrack& t, PluginHost& host,
                    std::function<void(TrackRow*)> removeCb,
-                   std::function<void()> layoutCb)
+                   std::function<void()> layoutCb,
+                   std::function<void(TrackRow*, TrackRow*, bool)> reorderCb)
     : track(t), pluginHost(host), onRemove(std::move(removeCb)),
       onLayoutChanged(std::move(layoutCb)),
+      onReorderRequested(std::move(reorderCb)),
       trackMeter(t.getPeakRef())
 {
     addAndMakeVisible(nameLabel);
@@ -194,6 +196,12 @@ TrackRow::TrackRow(AudioTrack& t, PluginHost& host,
     refreshTimeLabel();
     refreshPluginLabel();
     updateButtons();
+
+    dragStarter = std::make_unique<TrackRowDragStarter>(this);
+    addMouseListener(dragStarter.get(), false);
+    nameLabel.addMouseListener(dragStarter.get(), false);
+    timeLabel.addMouseListener(dragStarter.get(), false);
+    pluginLabel.addMouseListener(dragStarter.get(), false);
 }
 
 void TrackRow::paint(juce::Graphics& g)
@@ -203,6 +211,63 @@ void TrackRow::paint(juce::Graphics& g)
     g.setColour(juce::Colour(0xff404040));
     g.drawLine(0.0f, 0.0f, (float)getWidth(), 0.0f, 1.0f);
     g.drawLine(0.0f, (float)getHeight(), (float)getWidth(), (float)getHeight(), 1.0f);
+
+    if (dropHoverActive)
+    {
+        g.setColour(juce::Colours::yellow);
+        const float y = dropInsertAbove ? 0.0f : (float) getHeight();
+        g.drawLine(0.0f, y, (float) getWidth(), y, 2.0f);
+    }
+}
+
+void TrackRowDragStarter::mouseDown(const juce::MouseEvent& e)
+{
+    if (! e.mods.isLeftButtonDown() || row == nullptr) return;
+    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(row))
+    {
+        static const juce::String sourceDesc("TrackRowReorder");
+        container->startDragging(sourceDesc, row);
+    }
+}
+
+bool TrackRow::isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails& details)
+{
+    return details.description == "TrackRowReorder" && details.sourceComponent.get() != this;
+}
+
+void TrackRow::itemDragEnter(const juce::DragAndDropTarget::SourceDetails& details)
+{
+    dropInsertAbove = details.localPosition.y < (float) getHeight() * 0.5f;
+    dropHoverActive = true;
+    repaint();
+}
+
+void TrackRow::itemDragMove(const juce::DragAndDropTarget::SourceDetails& details)
+{
+    const bool above = details.localPosition.y < (float) getHeight() * 0.5f;
+    if (above != dropInsertAbove)
+    {
+        dropInsertAbove = above;
+        repaint();
+    }
+}
+
+void TrackRow::itemDragExit(const juce::DragAndDropTarget::SourceDetails&)
+{
+    dropHoverActive = false;
+    repaint();
+}
+
+void TrackRow::itemDropped(const juce::DragAndDropTarget::SourceDetails& details)
+{
+    dropHoverActive = false;
+    repaint();
+
+    auto* source = dynamic_cast<TrackRow*>(details.sourceComponent.get());
+    if (source == nullptr || source == this) return;
+
+    if (onReorderRequested)
+        onReorderRequested(source, this, dropInsertAbove);
 }
 
 static bool isAudioFile(const juce::String& path)

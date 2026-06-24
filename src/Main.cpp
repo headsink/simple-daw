@@ -12,7 +12,8 @@
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
-                      public juce::Timer
+                      public juce::Timer,
+                      public juce::DragAndDropContainer
 {
     static inline const juce::String noneOutputEntry { "(none)" };
 public:
@@ -436,7 +437,8 @@ private:
         auto* trackPtr = track.get();
         auto row = std::make_unique<TrackRow>(*trackPtr, pluginHost,
             [this](TrackRow* r) { removeTrack(r); },
-            [this] { refreshLayout(); });
+            [this] { refreshLayout(); },
+            [this](TrackRow* from, TrackRow* to, bool above) { reorderTrack(from, to, above); });
 
         {
             const juce::SpinLock::ScopedLockType sl(tracksLock);
@@ -466,7 +468,8 @@ private:
 
         auto row = std::make_unique<TrackRow>(*track, pluginHost,
             [this](TrackRow* r) { removeTrack(r); },
-            [this] { refreshLayout(); });
+            [this] { refreshLayout(); },
+            [this](TrackRow* from, TrackRow* to, bool above) { reorderTrack(from, to, above); });
         row->setNameText("(loading...) " + audioFile.getFileName());
 
         {
@@ -523,6 +526,34 @@ private:
                 }
                 refreshLayout();
             });
+    }
+
+    void reorderTrack(TrackRow* from, TrackRow* to, bool insertAbove)
+    {
+        if (from == to) return;
+        size_t fromIdx = SIZE_MAX, toIdx = SIZE_MAX;
+        for (size_t i = 0; i < trackRows.size(); ++i)
+        {
+            if (trackRows[i].get() == from) fromIdx = i;
+            if (trackRows[i].get() == to)   toIdx = i;
+        }
+        if (fromIdx == SIZE_MAX || toIdx == SIZE_MAX) return;
+
+        const juce::SpinLock::ScopedLockType sl(tracksLock);
+
+        size_t newIdx = insertAbove ? toIdx : toIdx + 1;
+
+        auto movedTrack = std::move(tracks[fromIdx]);
+        auto movedRow   = std::move(trackRows[fromIdx]);
+        tracks.erase(tracks.begin() + fromIdx);
+        trackRows.erase(trackRows.begin() + fromIdx);
+
+        if (newIdx > fromIdx) --newIdx;
+
+        tracks.insert(tracks.begin() + newIdx, std::move(movedTrack));
+        trackRows.insert(trackRows.begin() + newIdx, std::move(movedRow));
+
+        refreshLayout();
     }
 
     void updateSeqButtons()

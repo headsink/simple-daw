@@ -7,13 +7,24 @@
 
 class PluginEditorWindow;
 
+struct TrackRowDragStarter : public juce::MouseListener
+{
+    explicit TrackRowDragStarter(class TrackRow* r) : row(r) {}
+
+    void mouseDown(const juce::MouseEvent& e) override;
+
+    class TrackRow* row = nullptr;
+};
+
 class TrackRow : public juce::Component,
-                   public juce::FileDragAndDropTarget
+                   public juce::FileDragAndDropTarget,
+                   public juce::DragAndDropTarget
 {
 public:
     TrackRow(AudioTrack& track, PluginHost& host,
              std::function<void(TrackRow*)> onRemove,
-             std::function<void()> onLayoutChanged);
+             std::function<void()> onLayoutChanged,
+             std::function<void(TrackRow* from, TrackRow* to, bool insertAbove)> onReorderRequested);
     ~TrackRow();
 
     void paint(juce::Graphics& g) override;
@@ -23,6 +34,12 @@ public:
     void fileDragEnter(const juce::StringArray& files, int x, int y) override;
     void fileDragExit(const juce::StringArray& files) override;
     void filesDropped(const juce::StringArray& files, int x, int y) override;
+
+    bool isInterestedInDragSource(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDragEnter(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDragMove(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDragExit(const juce::DragAndDropTarget::SourceDetails& details) override;
+    void itemDropped(const juce::DragAndDropTarget::SourceDetails& details) override;
 
     AudioTrack& getTrack() { return track; }
     static int getPreferredHeight() { return 76; }
@@ -49,6 +66,7 @@ private:
     PluginHost& pluginHost;
     std::function<void(TrackRow*)> onRemove;
     std::function<void()> onLayoutChanged;
+    std::function<void(TrackRow* from, TrackRow* to, bool insertAbove)> onReorderRequested;
 
     juce::Label nameLabel;
     juce::TextButton loadButton {"Load"};
@@ -79,9 +97,12 @@ private:
 
     bool abOpen = false;
     bool dragHighlight = false;
+    bool dropHoverActive = false;
+    bool dropInsertAbove = false;
 
     PluginEditorWindow* editorWindow = nullptr;
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
+    std::unique_ptr<TrackRowDragStarter> dragStarter;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TrackRow)
 };
