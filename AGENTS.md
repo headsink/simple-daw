@@ -237,6 +237,11 @@ To see MIDI / audio logs while running, launch from PowerShell so the stdout is 
 - **Toggle buttons**: prefer `TextButton` + `setClickingTogglesState(true)` over `ToggleButton`.
 - **File dialog pattern:** `browseForFileToOpen()` (modal) with `JUCE_MODAL_LOOPS_PERMITTED=1`.
 - **Refactor timing:** `src/Main.cpp` split into `src/audio/`, `src/midi/`, `src/tracks/` via `GLOB_RECURSE`.
+- **Refactor — split `MainComponent` into focused classes.** When `MainComponent` hit 42 KB / ~1400 lines it became a god class. Extracted:
+  - `src/ui/TransportBar.{h,cpp}` — top row + status label, callback-driven.
+  - `src/tracks/TracksViewport.{h,cpp}` — owns viewport + container + tracks/trackRows + `tracksLock` + add/remove/reorder/clear/layout/render.
+  - `src/session/SessionIO.{h,cpp}` — plain helper for `.sdaw` save/load + recording; reads/writes slider values via lambda getters/setters.
+  `MainComponent` shrinks to ~21 KB and just composes the sub-components + handles the `AudioAppComponent` audio loop, `MidiInputCallback`, `Timer`, `DragAndDropContainer`, and spacebar transport. All three new modules live in the existing `GLOB_RECURSE src/*.cpp` glob, so no `CMakeLists.txt` change was needed.
 - **Window size:** 960×600 is the user-confirmed default. Do not increase.
 
 ---
@@ -273,7 +278,9 @@ simple-daw/
 │   │   ├── AudioTrack.h        ✓ Mixer track (gain/pan/mute/solo + plugin insert + A/B pass-throughs + renderInto)
 │   │   ├── AudioTrack.cpp      ✓
 │   │   ├── TrackRow.h          ✓ Per-track row: name, Load, Play, Stop, time, Gain, Pan, Mute, Solo, Loop, A/B, VST3, Bypass, Edit, X + plugin label + collapsible A/B panel
-│   │   └── TrackRow.cpp        ✓
+│   │   ├── TrackRow.cpp        ✓
+│   │   ├── TracksViewport.h    ✓ Owns viewport + container + tracks/trackRows + tracksLock + add/remove/reorder/clear/layout/render
+│   │   └── TracksViewport.cpp  ✓
 │   ├── plugin/
 │   │   ├── PluginHost.h        ✓ AudioPluginFormatManager + KnownPluginList wrapper
 │   │   ├── PluginHost.cpp      ✓
@@ -283,7 +290,12 @@ simple-daw/
 │   │   ├── PianoRollComponent.cpp ✓
 │   │   ├── PeakMeterComponent.h   ✓ Log-scale master peak meter (Timer + atomic read+reset + decay)
 │   │   ├── TrackMeterComponent.h  ✓ Log-scale per-track peak meter
-│   │   └── SettingsWindow.h     ✓ AudioDeviceSelectorComponent in DocumentWindow (deferred close)
+│   │   ├── SettingsWindow.h     ✓ AudioDeviceSelectorComponent in DocumentWindow (deferred close)
+│   │   ├── TransportBar.h       ✓ Top row + status label (callback-driven)
+│   │   └── TransportBar.cpp     ✓
+│   ├── session/
+│   │   ├── SessionIO.h          ✓ Save/load/recording helper
+│   │   └── SessionIO.cpp        ✓
 ├── third_party/
 │   └── JUCE/                   ✓ cloned
 ├── docs/

@@ -2,24 +2,44 @@
 #include "midi/SynthAudioSource.h"
 #include "midi/MidiTrack.h"
 #include "midi/MidiOutputRouter.h"
-#include "tracks/AudioTrack.h"
-#include "tracks/TrackRow.h"
+#include "audio/Recorder.h"
+#include "tracks/TracksViewport.h"
 #include "plugin/PluginHost.h"
 #include "ui/PianoRollComponent.h"
-#include "ui/PeakMeterComponent.h"
 #include "ui/SettingsWindow.h"
-#include "audio/Recorder.h"
+#include "ui/TransportBar.h"
+#include "session/SessionIO.h"
 
 class MainComponent : public juce::AudioAppComponent,
                       public juce::MidiInputCallback,
                       public juce::Timer,
                       public juce::DragAndDropContainer
 {
-    static inline const juce::String noneOutputEntry { "(none)" };
 public:
     MainComponent()
         : midiKeyboard(synthSource.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard),
-          peakMeter(masterPeak)
+          transportBar(masterPeak,
+                       [this] { tracksViewport.addTrack(); },
+                       [this] { onScanPlugins(); },
+                       [this] { onSettings(); },
+                       [this] { sessionIO.saveSession(); },
+                       [this] { sessionIO.loadSession(); },
+                       [this] { sessionIO.toggleRecording(); },
+                       [this](const juce::String& name) { onMidiOutputChanged(name); },
+                       [this](float v) { masterGainTarget.store(v); }),
+          tracksViewport(deviceManager, pluginHost,
+                         [this](TrackRow* r) { tracksViewport.removeTrack(r); },
+                         [this] { refreshLayout(); }),
+          sessionIO(deviceManager, recorder, midiOutputRouter, midiTrack,
+                    tracksViewport, pluginHost, transportBar,
+                    [this] { return (float) synthGainSlider.getValue(); },
+                    [this] { return (float) midiGainSlider.getValue(); },
+                    [this] { return bpmSlider.getValue(); },
+                    [this](float v, juce::NotificationType nt) { synthGainSlider.setValue((double) v, nt); },
+                    [this](float v, juce::NotificationType nt) { midiGainSlider.setValue((double) v, nt); },
+                    [this](double v, juce::NotificationType nt) { bpmSlider.setValue(v, nt); },
+                    [this](const juce::String& name) { onMidiOutputRestored(name); },
+                    [this] { refreshLayout(); })
     {
         setSize(960, 600);
 
@@ -31,77 +51,7 @@ public:
         midiKeyboard.setColour(juce::MidiKeyboardComponent::keySeparatorLineColourId, juce::Colour(0xff404040));
         midiKeyboard.setColour(juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, juce::Colour(0x805080ff));
 
-        addAndMakeVisible(statusLabel);
-        statusLabel.setJustificationType(juce::Justification::centredLeft);
-        statusLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-
-        addAndMakeVisible(addTrackButton);
-        addTrackButton.setButtonText("+ Add Track");
-        addTrackButton.onClick = [this] { addTrack(); };
-
-        addAndMakeVisible(scanPluginsButton);
-        scanPluginsButton.setButtonText("Scan VST3");
-        scanPluginsButton.onClick = [this]
-        {
-            scanPluginsButton.setEnabled(false);
-            pluginHost.scanForPluginsAsync();
-            juce::Timer::callAfterDelay(2000, [this]
-            {
-                scanPluginsButton.setEnabled(! pluginHost.isScanning());
-            });
-        };
-
-        addAndMakeVisible(settingsButton);
-        settingsButton.setButtonText("Settings");
-        settingsButton.onClick = [this]
-        {
-            if (settingsWindow == nullptr)
-            {
-                auto aliveFlag = alive;
-                settingsWindow = new SettingsWindow(deviceManager,
-                    [this, aliveFlag] { if (*aliveFlag) settingsWindow = nullptr; });
-            }
-            else
-            {
-                settingsWindow->toFront(true);
-            }
-        };
-
-        addAndMakeVisible(saveButton);
-        saveButton.setButtonText("Save");
-        saveButton.onClick = [this] { saveSession(); };
-
-        addAndMakeVisible(loadButton);
-        loadButton.setButtonText("Load");
-        loadButton.onClick = [this] { loadSession(); };
-
-        addAndMakeVisible(recordButton);
-        recordButton.setButtonText("Rec");
-        recordButton.setClickingTogglesState(true);
-        recordButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xffaa3030));
-        recordButton.onClick = [this] { toggleRecording(); };
-
-        addAndMakeVisible(midiOutputLabel);
-        midiOutputLabel.setText("MIDI Out", juce::dontSendNotification);
-        midiOutputLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-        midiOutputLabel.setJustificationType(juce::Justification::centredRight);
-
-        addAndMakeVisible(midiOutputCombo);
-        midiOutputCombo.setTooltip("Route on-screen keyboard and sequencer notes to a hardware/software MIDI output");
-        midiOutputCombo.onChange = [this]
-        {
-            const auto name = midiOutputCombo.getText();
-            midiOutputRouter.sendAllNotesOff();
-            if (name == noneOutputEntry || name.isEmpty())
-                midiOutputRouter.closeOutput();
-            else
-                midiOutputRouter.openOutput(name);
-        };
-        refreshMidiOutputCombo();
-
-        addAndMakeVisible(tracksViewport);
-        tracksViewport.setViewedComponent(&tracksContainer);
-        tracksViewport.setScrollBarsShown(true, false);
+        addAndMakeVisible(transportBar);
 
         addAndMakeVisible(seqPlayButton);
         seqPlayButton.setButtonText("Seq Play");
@@ -166,22 +116,6 @@ public:
         seqBeatLabel.setJustificationType(juce::Justification::centredLeft);
         seqBeatLabel.setText("beat: 0.0 / 8.0", juce::dontSendNotification);
 
-        addAndMakeVisible(synthGainLabel);
-        synthGainLabel.setText("Synth", juce::dontSendNotification);
-        synthGainLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-        synthGainLabel.setJustificationType(juce::Justification::centredRight);
-
-        addAndMakeVisible(synthGainSlider);
-        synthGainSlider.setRange(0.0, 2.0, 0.01);
-        synthGainSlider.setValue(0.6);
-        synthGainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-        synthGainSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-        synthGainSlider.setTextBoxIsEditable(false);
-        synthGainSlider.onValueChange = [this]
-        {
-            synthGain.store((float)synthGainSlider.getValue());
-        };
-
         addAndMakeVisible(midiGainLabel);
         midiGainLabel.setText("Seq", juce::dontSendNotification);
         midiGainLabel.setColour(juce::Label::textColourId, juce::Colours::white);
@@ -195,35 +129,32 @@ public:
         midiGainSlider.setTextBoxIsEditable(false);
         midiGainSlider.onValueChange = [this]
         {
-            midiGain.store((float)midiGainSlider.getValue());
+            midiGain.store((float) midiGainSlider.getValue());
+        };
+
+        addAndMakeVisible(tracksViewport);
+
+        addAndMakeVisible(synthGainLabel);
+        synthGainLabel.setText("Synth", juce::dontSendNotification);
+        synthGainLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+        synthGainLabel.setJustificationType(juce::Justification::centredRight);
+
+        addAndMakeVisible(synthGainSlider);
+        synthGainSlider.setRange(0.0, 2.0, 0.01);
+        synthGainSlider.setValue(0.6);
+        synthGainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+        synthGainSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+        synthGainSlider.setTextBoxIsEditable(false);
+        synthGainSlider.onValueChange = [this]
+        {
+            synthGain.store((float) synthGainSlider.getValue());
         };
 
         setAudioChannels(0, 2);
         openAllMidiInputs();
+        refreshMidiOutputCombo();
 
-        addAndMakeVisible(masterGainLabel);
-        masterGainLabel.setText("Master", juce::dontSendNotification);
-        masterGainLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-        masterGainLabel.setJustificationType(juce::Justification::centredRight);
-
-        addAndMakeVisible(masterGainSlider);
-        masterGainSlider.setRange(0.0, 2.0, 0.01);
-        masterGainSlider.setValue(0.8);
-        masterGainSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-        masterGainSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
-        masterGainSlider.setTextBoxIsEditable(false);
-        masterGainSlider.onValueChange = [this]
-        {
-            masterGainTarget.store((float)masterGainSlider.getValue());
-        };
-
-        addAndMakeVisible(peakMeter);
-        addAndMakeVisible(peakLabel);
-        peakLabel.setText("Peak", juce::dontSendNotification);
-        peakLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-        peakLabel.setJustificationType(juce::Justification::centredRight);
-
-        addTrack();
+        tracksViewport.addTrack();
         refreshLayout();
         updateSeqButtons();
 
@@ -244,20 +175,13 @@ public:
 
         if (pianoRollWindow) { delete pianoRollWindow; pianoRollWindow = nullptr; }
         if (settingsWindow) { delete settingsWindow; settingsWindow = nullptr; }
-
-        {
-            const juce::SpinLock::ScopedLockType sl(tracksLock);
-            trackRows.clear();
-            tracks.clear();
-        }
     }
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
     {
         synthSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
         midiTrack.prepareToPlay(samplesPerBlockExpected, sampleRate);
-        for (auto& t : tracks)
-            t->prepareToPlay(samplesPerBlockExpected, sampleRate);
+        tracksViewport.prepareAllToPlay(samplesPerBlockExpected, sampleRate);
 
         pluginHost.setSampleRate(sampleRate);
         pluginHost.setBlockSize(samplesPerBlockExpected);
@@ -284,15 +208,7 @@ public:
 
     void getNextAudioBlock(const juce::AudioSourceChannelInfo& bufferToFill) override
     {
-        bool anyTrackSoloed = false;
-        {
-            const juce::SpinLock::ScopedTryLockType sl(tracksLock);
-            if (sl.isLocked())
-            {
-                for (auto& t : tracks)
-                    if (t->isSolo()) { anyTrackSoloed = true; break; }
-            }
-        }
+        const bool anyTrackSoloed = tracksViewport.anyTrackSoloed();
 
         if (scratchBuffer.getNumChannels() < bufferToFill.buffer->getNumChannels()
             || scratchBuffer.getNumSamples() < bufferToFill.numSamples)
@@ -323,15 +239,8 @@ public:
             bufferToFill.buffer->addFrom(ch, bufferToFill.startSample, midiTrackScratch,
                                          ch, 0, bufferToFill.numSamples, mg);
 
-        {
-            const juce::SpinLock::ScopedTryLockType sl(tracksLock);
-            if (sl.isLocked())
-            {
-                for (auto& t : tracks)
-                    t->renderInto(*bufferToFill.buffer, bufferToFill.startSample,
-                                  bufferToFill.numSamples, anyTrackSoloed);
-            }
-        }
+        tracksViewport.tryRenderAll(*bufferToFill.buffer, bufferToFill.startSample,
+                                    bufferToFill.numSamples, anyTrackSoloed);
 
         masterGainSmoothed.setTargetValue(masterGainTarget.load());
         const float master = masterGainSmoothed.getNextValue();
@@ -352,8 +261,7 @@ public:
         deviceManager.removeAudioCallback(&recorder);
         synthSource.releaseResources();
         midiTrack.releaseResources();
-        for (auto& t : tracks)
-            t->releaseResources();
+        tracksViewport.releaseAllResources();
     }
 
     void paint(juce::Graphics& g) override
@@ -375,13 +283,9 @@ public:
         if (key == juce::KeyPress::spaceKey)
         {
             if (midiTrack.isPlaying())
-            {
                 midiTrack.stop();
-            }
             else
-            {
                 midiTrack.play();
-            }
             updateSeqButtons();
             return true;
         }
@@ -410,7 +314,7 @@ public:
         }
         updateStatus(deviceName, bufferSize, actualSampleRate);
 
-        for (auto& row : trackRows)
+        for (const auto& row : tracksViewport.getTrackRows())
             row->refreshTimeLabel();
 
         updateSeqButtons();
@@ -421,139 +325,45 @@ public:
     }
 
 private:
-    void addTrack()
+    void onScanPlugins()
     {
-        double sr = 48000.0;
-        int bs = 512;
-        if (auto* device = deviceManager.getCurrentAudioDevice())
+        transportBar.setScanButtonEnabled(false);
+        pluginHost.scanForPluginsAsync();
+        juce::Timer::callAfterDelay(2000, [this]
         {
-            sr = device->getCurrentSampleRate();
-            bs = device->getCurrentBufferSizeSamples();
-        }
-
-        auto track = std::make_unique<AudioTrack>();
-        track->prepareToPlay(bs, sr);
-
-        auto* trackPtr = track.get();
-        auto row = std::make_unique<TrackRow>(*trackPtr, pluginHost,
-            [this](TrackRow* r) { removeTrack(r); },
-            [this] { refreshLayout(); },
-            [this](TrackRow* from, TrackRow* to, bool above) { reorderTrack(from, to, above); });
-
-        {
-            const juce::SpinLock::ScopedLockType sl(tracksLock);
-            tracks.push_back(std::move(track));
-            trackRows.push_back(std::move(row));
-        }
-        tracksContainer.addAndMakeVisible(trackRows.back().get());
-        refreshLayout();
+            transportBar.setScanButtonEnabled(! pluginHost.isScanning());
+        });
     }
 
-    TrackRow* createTrackFromFileAsync(juce::File audioFile, float initialGain)
+    void onSettings()
     {
-        double sr = 48000.0;
-        int bs = 512;
-        if (auto* device = deviceManager.getCurrentAudioDevice())
+        if (settingsWindow == nullptr)
         {
-            sr = device->getCurrentSampleRate();
-            bs = device->getCurrentBufferSizeSamples();
+            auto aliveFlag = alive;
+            settingsWindow = new SettingsWindow(deviceManager,
+                [this, aliveFlag] { if (*aliveFlag) settingsWindow = nullptr; });
         }
-
-        auto track = std::make_unique<AudioTrack>();
-        track->prepareToPlay(bs, sr);
-        track->setGain(initialGain);
-
-        auto token = track->getLifetimeToken();
-        const int myVersion = token->load();
-
-        auto row = std::make_unique<TrackRow>(*track, pluginHost,
-            [this](TrackRow* r) { removeTrack(r); },
-            [this] { refreshLayout(); },
-            [this](TrackRow* from, TrackRow* to, bool above) { reorderTrack(from, to, above); });
-        row->setNameText("(loading...) " + audioFile.getFileName());
-
+        else
         {
-            const juce::SpinLock::ScopedLockType sl(tracksLock);
-            tracks.push_back(std::move(track));
-            trackRows.push_back(std::move(row));
+            settingsWindow->toFront(true);
         }
-        TrackRow* rowPtr = trackRows.back().get();
-        tracksContainer.addAndMakeVisible(rowPtr);
-        AudioTrack* trackRaw = tracks.back().get();
-
-        trackRaw->loadFileAsync(audioFile,
-            [this, rowPtr, token, myVersion](bool ok, const juce::String& err)
-            {
-                juce::MessageManager::getInstance()->callAsync(
-                    [this, rowPtr, token, myVersion, ok, err]
-                    {
-                        if (token->load() != myVersion) return;
-                        if (rowPtr == nullptr) return;
-                        if (ok)
-                            rowPtr->setNameText(rowPtr->getTrack().getSource().getLoadedFileName());
-                        else
-                            rowPtr->setNameText("(failed: " + err + ")");
-                        rowPtr->refreshTimeLabel();
-                        rowPtr->updateButtons();
-                        refreshLayout();
-                    });
-            });
-
-        return rowPtr;
     }
 
-    void removeTrack(TrackRow* row)
+    void onMidiOutputChanged(const juce::String& name)
     {
-        // Defer the actual destruction: removeTrack is invoked from inside the
-        // TrackRow's own removeButton.onClick lambda, so deleting the TrackRow
-        // synchronously here would destroy the Button mid-callback and corrupt
-        // the heap (trips _CrtIsValidHeapPointer). Detach from the parent now
-        // (safe — just unparents), then destroy on the message thread.
-        tracksContainer.removeChildComponent(row);
-
-        juce::MessageManager::getInstance()->callAsync(
-            [this, row]
-            {
-                for (size_t i = 0; i < trackRows.size(); ++i)
-                {
-                    if (trackRows[i].get() == row)
-                    {
-                        const juce::SpinLock::ScopedLockType sl(tracksLock);
-                        trackRows.erase(trackRows.begin() + i);
-                        tracks.erase(tracks.begin() + i);
-                        break;
-                    }
-                }
-                refreshLayout();
-            });
+        midiOutputRouter.sendAllNotesOff();
+        if (name == TransportBar::noneOutputEntry || name.isEmpty())
+            midiOutputRouter.closeOutput();
+        else
+            midiOutputRouter.openOutput(name);
     }
 
-    void reorderTrack(TrackRow* from, TrackRow* to, bool insertAbove)
+    void onMidiOutputRestored(const juce::String& name)
     {
-        if (from == to) return;
-        size_t fromIdx = SIZE_MAX, toIdx = SIZE_MAX;
-        for (size_t i = 0; i < trackRows.size(); ++i)
-        {
-            if (trackRows[i].get() == from) fromIdx = i;
-            if (trackRows[i].get() == to)   toIdx = i;
-        }
-        if (fromIdx == SIZE_MAX || toIdx == SIZE_MAX) return;
-
-        const juce::SpinLock::ScopedLockType sl(tracksLock);
-
-        size_t newIdx = insertAbove ? toIdx : toIdx + 1;
-
-        auto movedTrack = std::move(tracks[fromIdx]);
-        auto movedRow   = std::move(trackRows[fromIdx]);
-        tracks.erase(tracks.begin() + fromIdx);
-        trackRows.erase(trackRows.begin() + fromIdx);
-
-        if (newIdx > fromIdx) --newIdx;
-
-        tracks.insert(tracks.begin() + newIdx, std::move(movedTrack));
-        trackRows.insert(trackRows.begin() + newIdx, std::move(movedRow));
-
-        refreshLayout();
+        // Called from SessionIO::loadSession after the router has opened or
+        // closed the device. The combo has not been refreshed yet, so push
+        // the new selection explicitly.
+        transportBar.setMidiOutputSelection(name, juce::dontSendNotification);
     }
 
     void updateSeqButtons()
@@ -562,319 +372,13 @@ private:
         seqStopButton.setEnabled(midiTrack.isPlaying());
     }
 
-    void saveSession()
-    {
-        juce::FileChooser chooser("Save Session",
-            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
-            "*.sdaw");
-        if (! chooser.browseForFileToSave(true)) return;
-
-        auto file = chooser.getResult();
-        if (file.existsAsFile() && ! file.deleteFile()) return;
-
-        auto* obj = new juce::DynamicObject();
-        obj->setProperty("version", 1);
-        obj->setProperty("masterGain", (double) masterGainTarget.load());
-        obj->setProperty("synthGain", (double) synthGain.load());
-        obj->setProperty("midiGain", (double) midiGain.load());
-        obj->setProperty("bpm", midiTrack.getBpm());
-        obj->setProperty("midiOutput", midiOutputRouter.isOpen() ? midiOutputRouter.getCurrentName() : juce::String());
-
-        auto* clipObj = new juce::DynamicObject();
-        clipObj->setProperty("lengthBeats", midiTrack.getClip().getLengthBeats());
-        {
-            const juce::ScopedLock sl(midiTrack.getClip().lock);
-            juce::Array<juce::var> notesArray;
-            for (const auto& note : midiTrack.getClip().getNotes())
-            {
-                auto* n = new juce::DynamicObject();
-                n->setProperty("pitch", note.pitch);
-                n->setProperty("startBeat", note.startBeat);
-                n->setProperty("lengthBeats", note.lengthBeats);
-                n->setProperty("velocity", (int) note.velocity);
-                notesArray.add(juce::var(n));
-            }
-            clipObj->setProperty("notes", notesArray);
-        }
-        obj->setProperty("midiClip", juce::var(clipObj));
-
-        juce::Array<juce::var> tracksArray;
-        for (const auto& t : tracks)
-        {
-            if (! t->getSource().isLoaded()) continue;
-            auto* tObj = new juce::DynamicObject();
-            tObj->setProperty("filePath", t->getSource().getFilePath());
-            tObj->setProperty("gain", (double) t->getGain());
-            tObj->setProperty("pan", (double) t->getPan());
-            tObj->setProperty("mute", t->isMuted());
-            tObj->setProperty("solo", t->isSolo());
-            tObj->setProperty("looping", t->getSource().isLooping());
-            tObj->setProperty("loopStart", t->getLoopStart());
-            tObj->setProperty("loopEnd", t->getLoopEnd());
-
-            if (t->hasPlugin() && t->getPluginDesc() != nullptr && t->getPlugin() != nullptr)
-            {
-                const auto* desc = t->getPluginDesc();
-                auto* pObj = new juce::DynamicObject();
-                pObj->setProperty("identifier", desc->createIdentifierString());
-                pObj->setProperty("name", desc->name);
-                pObj->setProperty("manufacturer", desc->manufacturerName);
-                pObj->setProperty("format", desc->pluginFormatName);
-                pObj->setProperty("bypass", t->isPluginBypassed());
-
-                juce::MemoryBlock stateBlock;
-                t->getPlugin()->getStateInformation(stateBlock);
-                pObj->setProperty("state",
-                    juce::Base64::toBase64(stateBlock.getData(), stateBlock.getSize()));
-
-                tObj->setProperty("plugin", juce::var(pObj));
-            }
-
-            tracksArray.add(juce::var(tObj));
-        }
-        obj->setProperty("tracks", tracksArray);
-
-        if (auto stream = std::unique_ptr<juce::FileOutputStream>(file.createOutputStream()))
-        {
-            juce::JSON::writeToStream(*stream, juce::var(obj), true);
-            stream->flush();
-        }
-    }
-
-    void loadSession()
-    {
-        juce::FileChooser chooser("Load Session",
-            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
-            "*.sdaw");
-        if (! chooser.browseForFileToOpen()) return;
-
-        auto file = chooser.getResult();
-        if (! file.existsAsFile()) return;
-
-        auto json = juce::JSON::parse(file.loadFileAsString());
-        if (! json.isObject())
-        {
-            juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::WarningIcon,
-                "Load Error", "Invalid session file.");
-            return;
-        }
-
-        midiTrack.stop();
-
-        masterGainTarget.store((float)(double) json["masterGain"]);
-        masterGainSlider.setValue((double) masterGainTarget.load(), juce::dontSendNotification);
-        synthGain.store((float)(double) json["synthGain"]);
-        synthGainSlider.setValue((double) synthGain.load(), juce::dontSendNotification);
-        midiGain.store((float)(double) json["midiGain"]);
-        midiGainSlider.setValue((double) midiGain.load(), juce::dontSendNotification);
-
-        const double bpmVal = json["bpm"].isVoid() ? 120.0 : (double) json["bpm"];
-        midiTrack.setBpm(bpmVal);
-        bpmSlider.setValue(juce::jlimit(40.0, 240.0, bpmVal), juce::dontSendNotification);
-
-        {
-            const juce::String savedOut = json["midiOutput"].toString();
-            midiOutputRouter.sendAllNotesOff();
-            refreshMidiOutputCombo();
-            if (savedOut.isNotEmpty() && savedOut != noneOutputEntry)
-            {
-                if (midiOutputRouter.openOutput(savedOut))
-                    midiOutputCombo.setText(savedOut, juce::dontSendNotification);
-                else
-                    midiOutputCombo.setText(noneOutputEntry, juce::dontSendNotification);
-            }
-            else
-            {
-                midiOutputRouter.closeOutput();
-                midiOutputCombo.setText(noneOutputEntry, juce::dontSendNotification);
-            }
-        }
-
-        auto* clipObj = json["midiClip"].getDynamicObject();
-        if (clipObj != nullptr)
-        {
-            std::vector<MidiNote> newNotes;
-            auto* notesArray = clipObj->getProperty("notes").getArray();
-            if (notesArray != nullptr)
-            {
-                for (const auto& noteVar : *notesArray)
-                {
-                    auto* nObj = noteVar.getDynamicObject();
-                    if (nObj == nullptr) continue;
-                    MidiNote note;
-                    note.pitch = (int) nObj->getProperty("pitch");
-                    note.startBeat = (double) nObj->getProperty("startBeat");
-                    note.lengthBeats = (double) nObj->getProperty("lengthBeats");
-                    note.velocity = (uint8_t)(int) nObj->getProperty("velocity");
-                    newNotes.push_back(note);
-                }
-            }
-            const juce::ScopedLock sl(midiTrack.getClip().lock);
-            midiTrack.getClip().setLengthBeats((double) clipObj->getProperty("lengthBeats"));
-            midiTrack.getClip().replaceAllNotes(newNotes);
-            midiTrack.getClip().clearUndoHistory();
-        }
-
-        {
-            const juce::SpinLock::ScopedLockType sl(tracksLock);
-            trackRows.clear();
-            tracks.clear();
-        }
-
-        double sr = 48000.0;
-        int bs = 512;
-        if (auto* device = deviceManager.getCurrentAudioDevice())
-        {
-            sr = device->getCurrentSampleRate();
-            bs = device->getCurrentBufferSizeSamples();
-        }
-
-        auto* tracksArray = json["tracks"].getArray();
-        if (tracksArray != nullptr)
-        {
-            for (const auto& trackVar : *tracksArray)
-            {
-                auto* tObj = trackVar.getDynamicObject();
-                if (tObj == nullptr) continue;
-
-                juce::File audioFile(tObj->getProperty("filePath").toString());
-                if (! audioFile.existsAsFile()) continue;
-
-                const float savedGain = (float)(double) tObj->getProperty("gain");
-                TrackRow* rowPtr = createTrackFromFileAsync(audioFile, savedGain);
-                auto& track = rowPtr->getTrack();
-
-                track.setPan((float)(double) tObj->getProperty("pan"));
-                track.setMute((bool) tObj->getProperty("mute"));
-                track.setSolo((bool) tObj->getProperty("solo"));
-                track.getSource().setLooping((bool) tObj->getProperty("looping"));
-                track.setLoopStart((int)(double) tObj->getProperty("loopStart"));
-                track.setLoopEnd((int)(double) tObj->getProperty("loopEnd"));
-
-                juce::String pluginIdentifier;
-                juce::String pluginStateB64;
-                bool pluginBypass = false;
-                if (auto* pObj = tObj->getProperty("plugin").getDynamicObject())
-                {
-                    pluginIdentifier = pObj->getProperty("identifier").toString();
-                    pluginStateB64 = pObj->getProperty("state").toString();
-                    pluginBypass = (bool) pObj->getProperty("bypass");
-                }
-
-                if (pluginIdentifier.isNotEmpty())
-                {
-                    juce::PluginDescription matchDesc;
-                    bool found = false;
-                    for (const auto& t : pluginHost.getKnownList().getTypes())
-                    {
-                        if (t.createIdentifierString() == pluginIdentifier)
-                        {
-                            matchDesc = t;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (found)
-                    {
-                        auto token = track.getLifetimeToken();
-                        const int myVersion = token->load();
-                        const juce::String stateB64 = pluginStateB64;
-                        const bool bypass = pluginBypass;
-                        const juce::String ident = pluginIdentifier;
-
-                        pluginHost.createInstanceAsync(matchDesc,
-                            [this, rowPtr, token, myVersion, stateB64, bypass, ident]
-                            (std::unique_ptr<juce::AudioPluginInstance> inst, const juce::String& err)
-                            {
-                                if (token->load() != myVersion) return;
-                                if (rowPtr == nullptr) return;
-                                if (! inst) return;
-                                if (stateB64.isNotEmpty())
-                                {
-                                    juce::MemoryOutputStream decoded;
-                                    juce::Base64::convertFromBase64(decoded, stateB64);
-                                    decoded.flush();
-                                    if (decoded.getDataSize() > 0)
-                                        inst->setStateInformation(decoded.getData(),
-                                                                   (int) decoded.getDataSize());
-                                }
-                                auto descCopy = std::make_unique<juce::PluginDescription>();
-                                for (const auto& t : pluginHost.getKnownList().getTypes())
-                                {
-                                    if (t.createIdentifierString() == ident) { *descCopy = t; break; }
-                                }
-                                rowPtr->getTrack().setPlugin(std::move(inst), std::move(descCopy));
-                                rowPtr->getTrack().setPluginBypass(bypass);
-                                juce::MessageManager::getInstance()->callAsync(
-                                    [this, rowPtr, token, myVersion]
-                                    {
-                                        if (token->load() != myVersion) return;
-                                        if (rowPtr == nullptr) return;
-                                        rowPtr->refreshPluginLabel();
-                                        rowPtr->updateButtons();
-                                    });
-                            });
-                    }
-                }
-            }
-        }
-
-        refreshLayout();
-    }
-
-    void toggleRecording()
-    {
-        if (recorder.isRecording())
-        {
-            const juce::String path = recorder.stopRecording();
-            recordButton.setToggleState(false, juce::dontSendNotification);
-
-            if (path.isEmpty()) return;
-
-            juce::File file(path);
-            if (! file.existsAsFile()) return;
-
-            createTrackFromFileAsync(file, 0.6f);
-            refreshLayout();
-        }
-        else
-        {
-            recorder.startRecording();
-        }
-    }
-
     void refreshLayout()
     {
         auto area = getLocalBounds().reduced(12);
         area.removeFromTop(40);
         area.removeFromTop(8);
 
-        statusLabel.setBounds(area.removeFromTop(20));
-        area.removeFromTop(6);
-
-        auto topRow = area.removeFromTop(28);
-        addTrackButton.setBounds(topRow.removeFromRight(110));
-        topRow.removeFromRight(8);
-        scanPluginsButton.setBounds(topRow.removeFromRight(90));
-        topRow.removeFromRight(8);
-        settingsButton.setBounds(topRow.removeFromRight(80));
-        topRow.removeFromRight(16);
-        masterGainLabel.setBounds(topRow.removeFromRight(60));
-        topRow.removeFromRight(4);
-        masterGainSlider.setBounds(topRow.removeFromRight(180));
-        topRow.removeFromRight(12);
-        peakLabel.setBounds(topRow.removeFromRight(40));
-        topRow.removeFromRight(4);
-        peakMeter.setBounds(topRow.removeFromRight(140).reduced(0, 6));
-        saveButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
-        topRow.removeFromLeft(4);
-        loadButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
-        topRow.removeFromLeft(4);
-        recordButton.setBounds(topRow.removeFromLeft(50).reduced(2, 3));
-        topRow.removeFromLeft(8);
-        midiOutputLabel.setBounds(topRow.removeFromLeft(56));
-        topRow.removeFromLeft(4);
-        midiOutputCombo.setBounds(topRow.removeFromLeft(160).reduced(0, 4));
+        transportBar.setBounds(area.removeFromTop(54));
         area.removeFromTop(6);
 
         auto seqRow = area.removeFromTop(28);
@@ -900,18 +404,6 @@ private:
         tracksViewport.setBounds(area.removeFromTop(180));
         area.removeFromTop(8);
 
-        if (!trackRows.empty())
-        {
-            int totalHeight = 0;
-            for (size_t i = 0; i < trackRows.size(); ++i)
-            {
-                const int h = trackRows[i]->getCurrentPreferredHeight();
-                trackRows[i]->setBounds(0, totalHeight, tracksViewport.getWidth() - 4, h);
-                totalHeight += h;
-            }
-            tracksContainer.setSize(tracksViewport.getWidth(), std::max(totalHeight, tracksViewport.getHeight()));
-        }
-
         midiKeyboard.setBounds(area.removeFromTop(140));
 
         auto synthRow = area.removeFromTop(28);
@@ -922,13 +414,9 @@ private:
 
     void refreshMidiOutputCombo()
     {
-        midiOutputCombo.clear();
-        const auto names = midiOutputRouter.getAvailableOutputNames();
-        midiOutputCombo.addItem(noneOutputEntry, 1);
-        for (int i = 0; i < names.size(); ++i)
-            midiOutputCombo.addItem(names[i], i + 2);
-        midiOutputCombo.setText(midiOutputRouter.isOpen() ? midiOutputRouter.getCurrentName() : noneOutputEntry,
-                                juce::dontSendNotification);
+        transportBar.refreshMidiOutputCombo(
+            midiOutputRouter.getAvailableOutputNames(),
+            midiOutputRouter.isOpen() ? midiOutputRouter.getCurrentName() : TransportBar::noneOutputEntry);
     }
 
     void openAllMidiInputs()
@@ -956,7 +444,7 @@ private:
 
     void updateStatus(const juce::String& deviceName, int bufferSize, double actualSampleRate)
     {
-        const int midiCount = (int)openedInputs.size();
+        const int midiCount = (int) openedInputs.size();
         juce::String midiList = "none";
         if (midiCount > 0)
         {
@@ -966,6 +454,7 @@ private:
             midiList = names.joinIntoString(", ");
         }
         juce::String trackStates;
+        const auto& tracks = tracksViewport.getTracks();
         for (size_t i = 0; i < tracks.size(); ++i)
         {
             if (i > 0) trackStates += "  ";
@@ -974,34 +463,34 @@ private:
             else if (tracks[i]->getSource().isPlaying()) state = "P";
             trackStates += "T" + juce::String(i + 1) + ":" + state;
         }
-        statusLabel.setText("Device: " + deviceName
+        transportBar.setStatusText("Device: " + deviceName
             + "  |  Buffer: " + juce::String(bufferSize)
             + "  |  Rate: " + juce::String(actualSampleRate, 1) + " Hz"
             + "  |  MIDI (" + juce::String(midiCount) + "): " + midiList
-            + "  |  " + trackStates,
-            juce::dontSendNotification);
+            + "  |  " + trackStates);
     }
 
     SynthAudioSource synthSource;
     MidiTrack midiTrack;
     Recorder recorder;
     MidiOutputRouter midiOutputRouter;
-    juce::SpinLock tracksLock;
     PluginHost pluginHost;
-    std::vector<std::unique_ptr<AudioTrack>> tracks;
-    std::vector<std::unique_ptr<TrackRow>> trackRows;
+
+    std::atomic<float> synthGain{0.6f};
+    std::atomic<float> midiGain{0.5f};
+    std::atomic<float> masterGainTarget{0.8f};
+    std::atomic<float> masterPeak{0.0f};
+    juce::SmoothedValue<float> masterGainSmoothed{0.8f};
+
+    juce::AudioBuffer<float> scratchBuffer;
+    juce::AudioBuffer<float> midiTrackScratch;
+    juce::OwnedArray<juce::MidiInput> openedInputs;
+
+    TransportBar transportBar;
+    TracksViewport tracksViewport;
+    SessionIO sessionIO;
 
     juce::MidiKeyboardComponent midiKeyboard;
-    juce::Component tracksContainer;
-    juce::Viewport tracksViewport;
-    juce::TextButton addTrackButton;
-    juce::TextButton scanPluginsButton;
-    juce::TextButton settingsButton;
-    juce::TextButton saveButton;
-    juce::TextButton loadButton;
-    juce::TextButton recordButton;
-    juce::Label midiOutputLabel;
-    juce::ComboBox midiOutputCombo;
     juce::TextButton seqPlayButton;
     juce::TextButton seqStopButton;
     juce::TextButton seqLoopButton;
@@ -1009,25 +498,13 @@ private:
     juce::Label bpmLabel;
     juce::Slider bpmSlider;
     juce::Label seqBeatLabel;
-    PianoRollWindow* pianoRollWindow = nullptr;
-    SettingsWindow* settingsWindow = nullptr;
-    juce::Label statusLabel;
-    juce::Label synthGainLabel;
-    juce::Slider synthGainSlider;
     juce::Label midiGainLabel;
     juce::Slider midiGainSlider;
-    juce::Label masterGainLabel;
-    juce::Slider masterGainSlider;
-    juce::Label peakLabel;
-    std::atomic<float> masterPeak{0.0f};
-    PeakMeterComponent peakMeter;
-    juce::OwnedArray<juce::MidiInput> openedInputs;
-    juce::AudioBuffer<float> scratchBuffer;
-    juce::AudioBuffer<float> midiTrackScratch;
-    std::atomic<float> synthGain{0.6f};
-    std::atomic<float> midiGain{0.5f};
-    std::atomic<float> masterGainTarget{0.8f};
-    juce::SmoothedValue<float> masterGainSmoothed{0.8f};
+    juce::Label synthGainLabel;
+    juce::Slider synthGainSlider;
+
+    PianoRollWindow* pianoRollWindow = nullptr;
+    SettingsWindow* settingsWindow = nullptr;
     std::shared_ptr<bool> alive = std::make_shared<bool>(true);
 };
 

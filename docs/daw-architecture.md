@@ -20,13 +20,19 @@ and `juce::SmoothedValue<float>` (which is lock-free and audio-safe).
 ```
 +----------------------------- GUI thread -----------------------------+
 |                                                                     |
-|  MainComponent (AudioAppComponent + MidiInputCallback + Timer)     |
-|  +- MidiKeyboardComponent (5 octaves, C2..C7)                       |
-|  +- statusLabel, masterGainSlider, synthGainSlider, addTrackButton  |
-|  +- tracksContainer                                                 |
+|  MainComponent (AudioAppComponent + MidiInputCallback + Timer +     |
+|                 DragAndDropContainer)                              |
+|  +- TransportBar (top row + status)                                 |
+|  |    +- statusLabel, addTrack, scanVST3, settings, save, load,     |
+|  |       rec, midiOut combo, masterGain, peak meter                 |
+|  +- sequencer row  (Seq Play/Stop/Loop/Piano Roll, BPM, beat, Seq) |
+|  +- TracksViewport (owns tracksContainer + viewport)                |
 |  |    +- TrackRow 0   [Load/Play/Stop/Time/Gain/Pan/Mute/Solo/Loop/X]|
 |  |    +- TrackRow 1                                                  |
 |  |    +- ...                                                         |
+|  +- MidiKeyboardComponent (5 octaves, C2..C7)                       |
+|  +- synth row  (Synth gain)                                        |
+|  +- SessionIO  (save/load/recording helper)                         |
 |  +- openedInputs : OwnedArray<MidiInput>                            |
 |                                                                     |
 +-------------------------+------------------------+-------------------+
@@ -64,34 +70,46 @@ The root component. Inherits:
 - `juce::MidiInputCallback` - receives MIDI from hardware inputs.
 - `juce::Timer` - 500 ms tick that refreshes the status label and every
   `TrackRow::refreshTimeLabel()`.
+- `juce::DragAndDropContainer` - mixin that exposes
+  `findParentDragContainerFor` to `TrackRow` for track reorder.
 
-Owns:
+Owns the audio engine + state:
 
 - `SynthAudioSource synthSource` - the built-in sine synth.
-- `std::vector<std::unique_ptr<AudioTrack>> tracks` - the mixer strips.
-- `std::vector<std::unique_ptr<TrackRow>> trackRows` - one UI row per
-  track, kept in lock-step with `tracks` by index.
+- `MidiTrack midiTrack` - the sequencer track (synth + clip).
+- `Recorder recorder` - input capture.
+- `MidiOutputRouter midiOutputRouter` - selectable MIDI out.
+- `PluginHost pluginHost` - VST3 scan/host.
 - `juce::OwnedArray<juce::MidiInput> openedInputs` - all USB MIDI inputs
   opened on startup.
-- `juce::AudioBuffer<float> scratchBuffer` - scratch for the synth render.
-- `std::atomic<float> synthGain{0.6f}`,
-  `std::atomic<float> masterGainTarget{0.8f}`,
+- `juce::AudioBuffer<float> scratchBuffer` + `midiTrackScratch` - scratch
+  for the synth + sequencer renders.
+- `std::atomic<float> synthGain{0.6f}`, `midiGain{0.5f}`,
+  `masterGainTarget{0.8f}`, `masterPeak{0.0f}`,
   `juce::SmoothedValue<float> masterGainSmoothed{0.8f}`.
+
+Owns the sub-components that make up the UI (delegated work):
+
+- `TransportBar transportBar` - top row + status label.
+- `TracksViewport tracksViewport` - the tracks viewport + container.
+- `SessionIO sessionIO` - save/load/recording helper.
+
+Plus the remaining inline UI: sequencer row (Seq Play/Stop/Loop/Piano
+Roll/BPM/beat/Seq gain), MIDI keyboard, synth row, and the open
+subwindow pointers (`pianoRollWindow`, `settingsWindow`).
 
 Key methods:
 
-- `prepareToPlay` - forwards to `synthSource` and every track; resets the
-  smoothed master gain.
-- `getNextAudioBlock` - the entire mix. See the diagram above.
-- `addTrack` / `removeTrack` - keep `tracks` and `trackRows` in sync.
-- `refreshLayout` - vertical box layout. **Known wart:** constructs a
-  throwaway `TrackRow` on every resize just to read `getPreferredHeight()`
-  (76). Replace with a static accessor before VST3 lands, because a
-  future `TrackRow` will own the plugin editor and be non-cheap to
-  construct.
+- `prepareToPlay` - forwards to `synthSource`, `midiTrack`, and
+  `tracksViewport.prepareAllToPlay`; resets the smoothed master gain.
+- `getNextAudioBlock` - the entire mix. See the diagram above. Track
+  rendering is delegated to `tracksViewport.tryRenderAll`.
+- `refreshLayout` - vertical box layout of the sub-components and inline
+  rows. Track-row layout lives in `TracksViewport::refreshLayout`.
 - `handleIncomingMidiMessage` - logs the message and forwards note
   on/off to `synthSource.keyboardState`.
 - `timerCallback` - status update + per-row time refresh.
+- `keyPressed` - spacebar toggles sequencer play/stop.
 
 `MainWindow` is a `juce::DocumentWindow` with the native title bar. The
 title text is plain ASCII (`"Simple DAW"`) to avoid the em-dash encoding
@@ -99,6 +117,45 @@ garble (`aC`) seen in earlier builds when the source contained a UTF-8
 em-dash and the Win32 title bar interpreted it as ANSI.
 
 `SimpleDawApplication` is the `juce::JUCEApplication` glue.
+
+### `src/ui/TransportBar` - top row + status
+
+A `juce::Component` that owns the top strip of the main window: the
+status label, **+ Add Track** / **Scan VST3** / **Settings** buttons,
+**Save** / **Load** / **Rec** buttons, the **MIDI Out** combo, the
+**Master** gain slider, and the peak meter. Communicates with the rest
+of the app through a set of `std::function` callbacks given at
+construction time:
+
+- `onAddTrack`, `onScanPlugins`, `onSettings`
+- `onSave`, `onLoad`, `onRecordToggle`
+- `onMidiOutputChanged(name)`, `onMasterGainChanged(value)`
+
+Public mutators: `setStatusText`, `setMasterGain`, `setRecToggleState`,
+`setScanButtonEnabled`, `refreshMidiOutputCombo`,
+`setMidiOutputSelection`. Public getters: `getMasterGain`,
+`getMidiOutputSelection`. Exposes the `noneOutputEntry` constant for
+`SessionIO` to compare against.
+
+### `src/tracks/TracksViewport` - track list + viewport
+
+A `juce::Component` that owns the `juce::Viewport` and the inner
+`juce::Component` container, plus the `tracks` / `trackRows` vectors
+and the `tracksLock` spin-lock. Owns `addTrack` /
+`createTrackFromFileAsync` / `removeTrack` / `reorderTrack` /
+`clearAll` / `refreshLayout` / `prepareAllToPlay` /
+`releaseAllResources` / `tryRenderAll` / `anyTrackSoloed`. Exposes
+`getTracks()` and `getTrackRows()` for read-only access by
+`MainComponent` (status display) and `SessionIO` (save/load).
+
+### `src/session/SessionIO` - save / load / recording
+
+A plain helper class (not a `Component`). Owns the JSON `.sdaw`
+serialisation and the recording start/stop. Reads slider values and
+writes them back via `std::function` getters/setters given at
+construction time (so it does not need to know about the slider
+widgets directly). Methods: `saveSession`, `loadSession`,
+`toggleRecording`.
 
 ### `src/audio/AudioTrackSource` - file-backed `AudioSource`
 
