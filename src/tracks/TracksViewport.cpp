@@ -65,6 +65,7 @@ void TracksViewport::addTrack()
         tracks.push_back(std::move(track));
         trackRows.push_back(std::move(row));
     }
+    publishSnapshot();
     container.addAndMakeVisible(trackRows.back().get());
     refreshLayout();
 }
@@ -94,6 +95,7 @@ TrackRow* TracksViewport::createTrackFromFileAsync(const juce::File& audioFile, 
         tracks.push_back(std::move(track));
         trackRows.push_back(std::move(row));
     }
+    publishSnapshot();
     TrackRow* rowPtr = trackRows.back().get();
     container.addAndMakeVisible(rowPtr);
     AudioTrack* trackRaw = tracks.back().get();
@@ -145,6 +147,7 @@ void TracksViewport::removeTrack(TrackRow* row)
                     const juce::SpinLock::ScopedLockType sl(tracksLock);
                     trackRows.erase(trackRows.begin() + i);
                     tracks.erase(tracks.begin() + i);
+                    publishSnapshot();
                     break;
                 }
             }
@@ -178,14 +181,18 @@ void TracksViewport::reorderTrack(TrackRow* from, TrackRow* to, bool insertAbove
     tracks.insert(tracks.begin() + newIdx, std::move(movedTrack));
     trackRows.insert(trackRows.begin() + newIdx, std::move(movedRow));
 
+    publishSnapshot();
     refreshLayout();
 }
 
 void TracksViewport::clearAll()
 {
-    const juce::SpinLock::ScopedLockType sl(tracksLock);
-    trackRows.clear();
-    tracks.clear();
+    {
+        const juce::SpinLock::ScopedLockType sl(tracksLock);
+        trackRows.clear();
+        tracks.clear();
+    }
+    publishSnapshot();
 }
 
 void TracksViewport::prepareAllToPlay(int samplesPerBlockExpected, double sampleRate)
@@ -212,10 +219,21 @@ bool TracksViewport::anyTrackSoloed() const
 void TracksViewport::tryRenderAll(juce::AudioBuffer<float>& dest, int startSample,
                                   int numSamples, bool anyTrackSoloedFlag)
 {
-    const juce::SpinLock::ScopedTryLockType sl(tracksLock);
-    if (! sl.isLocked()) return;
-    for (auto& t : tracks)
+    auto snap = tracksSnapshot.load(std::memory_order_acquire);
+    for (auto* t : *snap)
         t->renderInto(dest, startSample, numSamples, anyTrackSoloedFlag);
+}
+
+void TracksViewport::publishSnapshot()
+{
+    auto snap = std::make_shared<std::vector<AudioTrack*>>();
+    {
+        const juce::SpinLock::ScopedLockType sl(tracksLock);
+        snap->reserve(tracks.size());
+        for (const auto& t : tracks)
+            snap->push_back(t.get());
+    }
+    tracksSnapshot.store(std::move(snap), std::memory_order_release);
 }
 
 void TracksViewport::refreshLayout()

@@ -15,18 +15,18 @@ AudioTrack::~AudioTrack()
 
 void AudioTrack::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
-    currentSampleRate = sampleRate > 0.0 ? sampleRate : 48000.0;
-    currentBlockSize = samplesPerBlockExpected > 0 ? samplesPerBlockExpected : 512;
+    currentSampleRate.store(sampleRate > 0.0 ? sampleRate : 48000.0);
+    currentBlockSize.store(samplesPerBlockExpected > 0 ? samplesPerBlockExpected : 512);
 
     source->prepareToPlay(samplesPerBlockExpected, sampleRate);
     scratchBuffer.setSize(2, samplesPerBlockExpected);
 
-    gainSmoothed.reset(currentSampleRate, 0.05);
+    gainSmoothed.reset(currentSampleRate.load(), 0.05);
     gainSmoothed.setCurrentAndTargetValue(gain.load());
 
     if (plugin)
     {
-        plugin->prepareToPlay(currentSampleRate, currentBlockSize);
+        plugin->prepareToPlay(currentSampleRate.load(), currentBlockSize.load());
         juce::AudioProcessor::BusesLayout stereo;
         stereo.inputBuses.add(juce::AudioChannelSet::stereo());
         stereo.outputBuses.add(juce::AudioChannelSet::stereo());
@@ -70,7 +70,7 @@ void AudioTrack::setPlugin(std::unique_ptr<juce::AudioPluginInstance> p,
     pluginDesc = std::move(desc);
     if (plugin)
     {
-        plugin->prepareToPlay(currentSampleRate, currentBlockSize);
+        plugin->prepareToPlay(currentSampleRate.load(), currentBlockSize.load());
         juce::AudioProcessor::BusesLayout stereo;
         stereo.inputBuses.add(juce::AudioChannelSet::stereo());
         stereo.outputBuses.add(juce::AudioChannelSet::stereo());

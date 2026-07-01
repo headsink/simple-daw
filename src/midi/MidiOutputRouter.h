@@ -18,93 +18,81 @@ public:
 
     bool openOutput(const juce::String& deviceName)
     {
-        const juce::CriticalSection::ScopedLockType sl(lock);
+        std::unique_ptr<juce::MidiOutput> newOut;
+        juce::String newName;
 
-        if (output != nullptr)
+        if (deviceName.isNotEmpty())
         {
-            output->stopBackgroundThread();
-            output.reset();
-        }
-        currentName.clear();
-
-        if (deviceName.isEmpty())
-            return false;
-
-        const auto devices = juce::MidiOutput::getAvailableDevices();
-        for (const auto& d : devices)
-        {
-            if (d.name == deviceName)
+            for (const auto& d : juce::MidiOutput::getAvailableDevices())
             {
-                auto out = juce::MidiOutput::openDevice(d.identifier);
-                if (out != nullptr)
+                if (d.name == deviceName)
                 {
-                    out->startBackgroundThread();
-                    output = std::move(out);
-                    currentName = deviceName;
-                    return true;
+                    newOut = juce::MidiOutput::openDevice(d.identifier);
+                    if (newOut != nullptr)
+                    {
+                        newOut->startBackgroundThread();
+                        newName = deviceName;
+                    }
+                    break;
                 }
             }
         }
-        return false;
+
+        juce::MidiOutput* old = nullptr;
+        {
+            const juce::CriticalSection::ScopedLockType sl(swapLock);
+            old = outputPtr.exchange(newOut.release(), std::memory_order_acq_rel);
+            currentName = newName;
+        }
+        if (old != nullptr)
+        {
+            old->stopBackgroundThread();
+            delete old;
+        }
+        return newName.isNotEmpty();
     }
 
-    void closeOutput()
-    {
-        const juce::CriticalSection::ScopedLockType sl(lock);
-        if (output != nullptr)
-        {
-            output->stopBackgroundThread();
-            output.reset();
-        }
-        currentName.clear();
-    }
+    void closeOutput() { openOutput({}); }
 
     bool isOpen() const
     {
-        const juce::CriticalSection::ScopedLockType sl(lock);
-        return output != nullptr;
+        return outputPtr.load(std::memory_order_acquire) != nullptr;
     }
 
     juce::String getCurrentName() const
     {
-        const juce::CriticalSection::ScopedLockType sl(lock);
+        const juce::CriticalSection::ScopedLockType sl(swapLock);
         return currentName;
     }
 
-    // Called from the audio thread. Sends immediately for sample-accurate timing.
-    // JUCE's MidiOutput::sendMessageNow is safe to call from the audio thread.
     void sendNow(const juce::MidiMessage& message)
     {
-        const juce::CriticalSection::ScopedLockType sl(lock);
-        if (output != nullptr)
-            output->sendMessageNow(message);
+        auto* out = outputPtr.load(std::memory_order_acquire);
+        if (out != nullptr)
+            out->sendMessageNow(message);
     }
 
-    // Called from the audio thread to send a whole MidiBuffer.
     void sendBuffer(const juce::MidiBuffer& buffer, int /*blockStartSample*/)
     {
-        const juce::CriticalSection::ScopedLockType sl(lock);
-        if (output == nullptr)
+        auto* out = outputPtr.load(std::memory_order_acquire);
+        if (out == nullptr)
             return;
 
         for (const auto meta : buffer)
-            output->sendMessageNow(meta.getMessage());
+            out->sendMessageNow(meta.getMessage());
     }
 
-    // Send all-notes-off on all 16 channels (call on close / device switch).
     void sendAllNotesOff()
     {
-        const juce::CriticalSection::ScopedLockType sl(lock);
-        if (output == nullptr)
+        auto* out = outputPtr.load(std::memory_order_acquire);
+        if (out == nullptr)
             return;
         for (int ch = 1; ch <= 16; ++ch)
-        {
-            output->sendMessageNow(juce::MidiMessage::allNotesOff(ch));
-        }
+            out->sendMessageNow(juce::MidiMessage::allNotesOff(ch));
     }
 
 private:
-    mutable juce::CriticalSection lock;
-    std::unique_ptr<juce::MidiOutput> output;
+    mutable juce::CriticalSection swapLock;
+    std::atomic<juce::MidiOutput*> outputPtr{nullptr};
     juce::String currentName;
 };

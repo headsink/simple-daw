@@ -62,18 +62,18 @@ private:
     juce::AudioBuffer<float> scratchBuffer;
     std::shared_ptr<std::atomic<int>> lifetimeToken;
 
-    std::atomic<float> gain{1.0f};
+    std::atomic<float> gain{0.25f};
     std::atomic<float> pan{0.0f};
     std::atomic<bool> mute{false};
     std::atomic<bool> solo{false};
     std::atomic<float> peak{0.0f};
-    juce::SmoothedValue<float> gainSmoothed{1.0f};
+    juce::SmoothedValue<float> gainSmoothed{0.25f};
 
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     std::unique_ptr<juce::PluginDescription> pluginDesc;
     std::atomic<bool> pluginBypass{false};
     juce::MidiBuffer pluginMidiBuffer;
     juce::SpinLock pluginLock;
-    double currentSampleRate = 48000.0;
-    int currentBlockSize = 512;
+    std::atomic<double> currentSampleRate{48000.0};
+    std::atomic<int> currentBlockSize{512};
 };

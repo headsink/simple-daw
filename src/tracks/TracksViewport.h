@@ -50,6 +50,11 @@ private:
     std::vector<std::unique_ptr<AudioTrack>> tracks;
     std::vector<std::unique_ptr<TrackRow>> trackRows;
 
+    std::atomic<std::shared_ptr<const std::vector<AudioTrack*>>> tracksSnapshot{
+        std::make_shared<const std::vector<AudioTrack*>>() };
+
+    void publishSnapshot();
+
     juce::Viewport viewport;
     juce::Component container;
 
