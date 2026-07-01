@@ -12,7 +12,7 @@ PluginScanThread::PluginScanThread(juce::KnownPluginList& resultList,
 
 PluginScanThread::~PluginScanThread()
 {
-    stopThread(5000);
+    stopThread(1000);
 }
 
 void PluginScanThread::run()

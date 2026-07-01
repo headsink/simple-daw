@@ -195,6 +195,10 @@ public:
 
     void closeButtonPressed() override
     {
+        bool expected = false;
+        if (! closing.compare_exchange_strong(expected, true))
+            return;
+
         juce::MessageManager::getInstance()->callAsync(
             [cb = onClosed, w = this]
             {
@@ -205,4 +209,5 @@ public:
 
 private:
     OnClosed onClosed;
+    std::atomic<bool> closing{false};
 };

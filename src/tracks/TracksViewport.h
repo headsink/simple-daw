@@ -18,7 +18,8 @@ public:
     void resized() override;
 
     void addTrack();
-    TrackRow* createTrackFromFileAsync(const juce::File& audioFile, float initialGain);
+    TrackRow* createTrackFromFileAsync(const juce::File& audioFile, float initialGain,
+                                       int loopStart = -1, int loopEnd = -1);
     void removeTrack(TrackRow* row);
     void reorderTrack(TrackRow* from, TrackRow* to, bool insertAbove);
     void clearAll();

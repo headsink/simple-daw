@@ -37,7 +37,7 @@ public:
     int getNumChannels() const;
     int getNumSamples() const;
     int getPlayPosition() const;
-    double getSampleRate() const { return currentSampleRate; }
+    double getSampleRate() const { return currentSampleRate.load(); }
 
 private:
     int clampLoopBound(int sample) const;
@@ -53,7 +53,7 @@ private:
     std::atomic<int> loadingFlag{0};
     std::atomic<int> loadGeneration{0};
     std::shared_ptr<std::atomic<int>> lifetimeToken;
-    double currentSampleRate = 44100.0;
+    std::atomic<double> currentSampleRate{44100.0};
     juce::String loadedFileName;
     juce::String loadedFilePath;
     juce::SpinLock bufferLock;

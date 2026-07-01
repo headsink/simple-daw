@@ -6,7 +6,7 @@ TrackRow::~TrackRow()
     *alive = false;
     if (editorWindow != nullptr)
     {
-        delete editorWindow;
+        editorWindow->closeButtonPressed();
         editorWindow = nullptr;
     }
 }
@@ -309,17 +309,13 @@ void TrackRow::filesDropped(const juce::StringArray& files, int /*x*/, int /*y*/
         track.loadFileAsync(file,
             [this, aliveFlag = alive](bool ok, const juce::String& err)
             {
-                juce::MessageManager::getInstance()->callAsync(
-                    [this, aliveFlag, ok, err]
-                    {
-                        if (! *aliveFlag) return;
-                        if (ok)
-                            nameLabel.setText(track.getSource().getLoadedFileName(), juce::dontSendNotification);
-                        else
-                            nameLabel.setText("(failed: " + err + ")", juce::dontSendNotification);
-                        refreshTimeLabel();
-                        updateButtons();
-                    });
+                if (! *aliveFlag) return;
+                if (ok)
+                    nameLabel.setText(track.getSource().getLoadedFileName(), juce::dontSendNotification);
+                else
+                    nameLabel.setText("(failed: " + err + ")", juce::dontSendNotification);
+                refreshTimeLabel();
+                updateButtons();
             });
         break;
     }
@@ -469,32 +465,27 @@ void TrackRow::openFile()
                 [this, aliveFlag](bool ok, const juce::String& err)
                 {
                     if (! *aliveFlag) return;
-                    juce::MessageManager::getInstance()->callAsync(
-                        [this, aliveFlag, ok, err]
-                        {
-                            if (! *aliveFlag) return;
-                            if (ok)
-                            {
-                                nameLabel.setText(track.getSource().getLoadedFileName(),
-                                                  juce::dontSendNotification);
-                            }
-                            else
-                            {
-                                nameLabel.setText("(failed: " + err + ")",
-                                                  juce::dontSendNotification);
-                            }
-                            updateButtons();
-                            refreshTimeLabel();
-                            if (abOpen)
-                            {
-                                const int total = track.getSource().getNumSamples();
-                                startSlider.setRange(0.0, (double) std::max(1, total), 1.0);
-                                endSlider.setRange(0.0, (double) std::max(1, total), 1.0);
-                                startSlider.setValue((double) track.getLoopStart(), juce::dontSendNotification);
-                                endSlider.setValue((double) track.getLoopEnd(), juce::dontSendNotification);
-                                refreshAbLabels();
-                            }
-                        });
+                    if (ok)
+                    {
+                        nameLabel.setText(track.getSource().getLoadedFileName(),
+                                          juce::dontSendNotification);
+                    }
+                    else
+                    {
+                        nameLabel.setText("(failed: " + err + ")",
+                                          juce::dontSendNotification);
+                    }
+                    updateButtons();
+                    refreshTimeLabel();
+                    if (abOpen)
+                    {
+                        const int total = track.getSource().getNumSamples();
+                        startSlider.setRange(0.0, (double) std::max(1, total), 1.0);
+                        endSlider.setRange(0.0, (double) std::max(1, total), 1.0);
+                        startSlider.setValue((double) track.getLoopStart(), juce::dontSendNotification);
+                        endSlider.setValue((double) track.getLoopEnd(), juce::dontSendNotification);
+                        refreshAbLabels();
+                    }
                 });
         }
     }

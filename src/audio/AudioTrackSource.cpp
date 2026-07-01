@@ -4,7 +4,7 @@ void AudioTrackSource::prepareToPlay(int, double sampleRate)
 {
     if (! lifetimeToken)
         lifetimeToken = std::make_shared<std::atomic<int>>(0);
-    currentSampleRate = sampleRate > 0.0 ? sampleRate : 44100.0;
+    currentSampleRate.store(sampleRate > 0.0 ? sampleRate : 44100.0);
 }
 
 AudioTrackSource::~AudioTrackSource()
@@ -104,7 +104,7 @@ void AudioTrackSource::applyLoadedBuffer(juce::AudioBuffer<float> newBuffer, dou
     fileBuffer = std::move(newBuffer);
     playPosition.store(0);
     playing.store(false);
-    if (sr > 0.0) currentSampleRate = sr;
+    if (sr > 0.0) currentSampleRate.store(sr);
     loopStart.store(0);
     loopEnd.store(fileBuffer.getNumSamples());
     loadedFileName = newName;
@@ -127,6 +127,7 @@ void AudioTrackSource::clearLoopRegion()
 
 int AudioTrackSource::clampLoopBound(int sample) const
 {
+    const juce::SpinLock::ScopedLockType sl(bufferLock);
     const int total = fileBuffer.getNumSamples();
     if (total <= 0) return 0;
     if (sample < 0) return 0;
@@ -179,10 +180,22 @@ void AudioTrackSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& inf
     playPosition.store(newPos);
 }
 
-bool AudioTrackSource::isLoaded() const { return fileBuffer.getNumSamples() > 0; }
+bool AudioTrackSource::isLoaded() const
+{
+    const juce::SpinLock::ScopedLockType sl(bufferLock);
+    return fileBuffer.getNumSamples() > 0;
+}
 bool AudioTrackSource::isPlaying() const { return playing.load(); }
 bool AudioTrackSource::isLooping() const { return looping.load(); }
 const juce::String& AudioTrackSource::getLoadedFileName() const { return loadedFileName; }
-int AudioTrackSource::getNumChannels() const { return fileBuffer.getNumChannels(); }
-int AudioTrackSource::getNumSamples() const { return fileBuffer.getNumSamples(); }
+int AudioTrackSource::getNumChannels() const
+{
+    const juce::SpinLock::ScopedLockType sl(bufferLock);
+    return fileBuffer.getNumChannels();
+}
+int AudioTrackSource::getNumSamples() const
+{
+    const juce::SpinLock::ScopedLockType sl(bufferLock);
+    return fileBuffer.getNumSamples();
+}
 int AudioTrackSource::getPlayPosition() const { return playPosition.load(); }

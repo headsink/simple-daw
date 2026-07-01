@@ -203,15 +203,16 @@ void SessionIO::loadSession()
             if (! audioFile.existsAsFile()) continue;
 
             const float savedGain = (float)(double) tObj->getProperty("gain");
-            TrackRow* rowPtr = tracksViewport.createTrackFromFileAsync(audioFile, savedGain);
+            const int savedLoopStart = (int)(double) tObj->getProperty("loopStart");
+            const int savedLoopEnd   = (int)(double) tObj->getProperty("loopEnd");
+            TrackRow* rowPtr = tracksViewport.createTrackFromFileAsync(audioFile, savedGain,
+                                                                       savedLoopStart, savedLoopEnd);
             auto& track = rowPtr->getTrack();
 
             track.setPan((float)(double) tObj->getProperty("pan"));
             track.setMute((bool) tObj->getProperty("mute"));
             track.setSolo((bool) tObj->getProperty("solo"));
             track.getSource().setLooping((bool) tObj->getProperty("looping"));
-            track.setLoopStart((int)(double) tObj->getProperty("loopStart"));
-            track.setLoopEnd((int)(double) tObj->getProperty("loopEnd"));
 
             juce::String pluginIdentifier;
             juce::String pluginStateB64;
@@ -257,8 +258,18 @@ void SessionIO::loadSession()
                                 juce::Base64::convertFromBase64(decoded, stateB64);
                                 decoded.flush();
                                 if (decoded.getDataSize() > 0)
-                                    inst->setStateInformation(decoded.getData(),
-                                                               (int) decoded.getDataSize());
+                                {
+                                    try
+                                    {
+                                        inst->setStateInformation(decoded.getData(),
+                                                                   (int) decoded.getDataSize());
+                                    }
+                                    catch (...)
+                                    {
+                                        juce::Logger::writeToLog("SessionIO: plugin "
+                                            + inst->getName() + " rejected saved state.");
+                                    }
+                                }
                             }
                             auto descCopy = std::make_unique<juce::PluginDescription>();
                             for (const auto& t : pluginHost.getKnownList().getTypes())

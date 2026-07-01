@@ -173,8 +173,8 @@ public:
         midiOutputRouter.closeOutput();
         shutdownAudio();
 
-        if (pianoRollWindow) { delete pianoRollWindow; pianoRollWindow = nullptr; }
-        if (settingsWindow) { delete settingsWindow; settingsWindow = nullptr; }
+        if (pianoRollWindow) { pianoRollWindow->closeButtonPressed(); pianoRollWindow = nullptr; }
+        if (settingsWindow)  { settingsWindow->closeButtonPressed();  settingsWindow  = nullptr; }
     }
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override

@@ -163,6 +163,10 @@ public:
 
     void closeButtonPressed() override
     {
+        bool expected = false;
+        if (! closing.compare_exchange_strong(expected, true))
+            return;
+
         juce::MessageManager::getInstance()->callAsync(
             [cb = onClosed, w = this]
             {
@@ -181,4 +185,5 @@ private:
 
     juce::AudioPluginInstance& plugin;
     OnClosed onClosed;
+    std::atomic<bool> closing{false};
 };

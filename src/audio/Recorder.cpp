@@ -2,6 +2,7 @@
 
 void Recorder::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
+    const juce::ScopedLock sl(bufferLock);
     if (device != nullptr)
     {
         recordSampleRate = device->getCurrentSampleRate();
@@ -43,7 +44,6 @@ void Recorder::startRecording()
 {
     const juce::ScopedLock sl(bufferLock);
     recordBufferLength = 0;
-    recordBuffer.setSize(0, 0);
     recording.store(true);
 }
 
@@ -51,14 +51,25 @@ juce::String Recorder::stopRecording()
 {
     recording.store(false);
 
-    const juce::ScopedLock sl(bufferLock);
+    juce::AudioBuffer<float> snapshot;
+    int snapshotLength = 0;
+    int snapshotChannels = 0;
+    double sr;
 
-    if (recordBufferLength == 0 || recordBuffer.getNumChannels() == 0)
-        return {};
+    {
+        const juce::ScopedLock sl(bufferLock);
 
-    const double sr = recordSampleRate > 0.0 ? recordSampleRate : 48000.0;
-    if (recordSampleRate <= 0.0)
-        recordSampleRate = sr;
+        if (recordBufferLength == 0 || recordBuffer.getNumChannels() == 0)
+            return {};
+
+        snapshotChannels = recordBuffer.getNumChannels();
+        snapshotLength = recordBufferLength;
+        snapshot.setSize(snapshotChannels, snapshotLength);
+        for (int ch = 0; ch < snapshotChannels; ++ch)
+            snapshot.copyFrom(ch, 0, recordBuffer, ch, 0, snapshotLength);
+
+        sr = recordSampleRate > 0.0 ? recordSampleRate : 48000.0;
+    }
 
     const juce::String filename = "simple-daw-recording-" +
         juce::Time::getCurrentTime().formatted("%Y%m%d-%H%M%S") + ".wav";
@@ -72,11 +83,11 @@ juce::String Recorder::stopRecording()
     if (stream == nullptr) return {};
 
     auto* rawWriter = wavFormat.createWriterFor(stream.get(), sr,
-        (unsigned int) recordBuffer.getNumChannels(), 16, {}, 0);
+        (unsigned int) snapshotChannels, 16, {}, 0);
     if (rawWriter == nullptr) return {};
 
     std::unique_ptr<juce::AudioFormatWriter> writer(rawWriter);
-    writer->writeFromAudioSampleBuffer(recordBuffer, 0, recordBufferLength);
+    writer->writeFromAudioSampleBuffer(snapshot, 0, snapshotLength);
     writer->flush();
 
     return outFile.getFullPathName();

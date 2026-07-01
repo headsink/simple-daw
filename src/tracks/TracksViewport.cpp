@@ -69,7 +69,8 @@ void TracksViewport::addTrack()
     refreshLayout();
 }
 
-TrackRow* TracksViewport::createTrackFromFileAsync(const juce::File& audioFile, float initialGain)
+TrackRow* TracksViewport::createTrackFromFileAsync(const juce::File& audioFile, float initialGain,
+                                                int loopStart, int loopEnd)
 {
     double sr = 48000.0;
     int bs = 512;
@@ -98,17 +99,29 @@ TrackRow* TracksViewport::createTrackFromFileAsync(const juce::File& audioFile, 
     AudioTrack* trackRaw = tracks.back().get();
 
     trackRaw->loadFileAsync(audioFile,
-        [this, rowPtr, token, myVersion](bool ok, const juce::String& err)
+        [this, rowPtr, token, myVersion, loopStart, loopEnd](bool ok, const juce::String& err)
         {
             juce::MessageManager::getInstance()->callAsync(
-                [this, rowPtr, token, myVersion, ok, err]
+                [this, rowPtr, token, myVersion, loopStart, loopEnd, ok, err]
                 {
                     if (token->load() != myVersion) return;
                     if (rowPtr == nullptr) return;
                     if (ok)
-                        rowPtr->setNameText(rowPtr->getTrack().getSource().getLoadedFileName());
+                    {
+                        auto& source = rowPtr->getTrack().getSource();
+                        rowPtr->setNameText(source.getLoadedFileName());
+                        if (loopStart >= 0 || loopEnd >= 0)
+                        {
+                            if (loopStart >= 0)
+                                rowPtr->getTrack().setLoopStart(loopStart);
+                            if (loopEnd >= 0)
+                                rowPtr->getTrack().setLoopEnd(loopEnd);
+                        }
+                    }
                     else
+                    {
                         rowPtr->setNameText("(failed: " + err + ")");
+                    }
                     rowPtr->refreshTimeLabel();
                     rowPtr->updateButtons();
                     refreshLayout();
