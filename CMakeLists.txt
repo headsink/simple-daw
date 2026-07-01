@@ -68,6 +68,7 @@ juce_add_console_app(SimpleDawTests
 
 target_sources(SimpleDawTests PRIVATE
     tests/MidiClipTests.cpp
+    tests/MidiOutputRouterTests.cpp
     src/midi/MidiClip.cpp
 )
 
@@ -78,6 +79,7 @@ target_include_directories(SimpleDawTests PRIVATE
 target_link_libraries(SimpleDawTests
     PRIVATE
         juce::juce_core
+        juce::juce_audio_devices
 )
 
 # juce_add_binary_data() goes here once we ship icons, fonts, or sample files.

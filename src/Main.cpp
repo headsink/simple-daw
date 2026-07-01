@@ -195,14 +195,28 @@ public:
         masterGainSmoothed.setCurrentAndTargetValue(masterGainTarget.load());
 
         juce::String deviceName = "none";
+        juce::String deviceType = "none";
         int bufferSize = 0;
         double actualSampleRate = sampleRate;
         if (auto* device = deviceManager.getCurrentAudioDevice())
         {
             deviceName = device->getName();
+            deviceType = device->getTypeName();
             bufferSize = device->getCurrentBufferSizeSamples();
             actualSampleRate = device->getCurrentSampleRate();
         }
+        juce::Logger::writeToLog("[DAW] prepareToPlay: device=\"" + deviceName
+            + "\" type=\"" + deviceType
+            + "\" buffer=" + juce::String(bufferSize)
+            + " rate=" + juce::String(actualSampleRate, 1) + "Hz"
+            + " channels=" + juce::String(deviceManager.getCurrentAudioDevice()
+                ? deviceManager.getCurrentAudioDevice()->getActiveOutputChannels().toInteger()
+                : 0));
+
+        firstNonZeroLogged.store(false);
+        hadAudio.store(false);
+        silentStreak.store(0);
+
         updateStatus(deviceName, bufferSize, actualSampleRate);
     }
 
@@ -254,6 +268,35 @@ public:
         const float currentPeak = masterPeak.load();
         if (blockPeak > currentPeak)
             masterPeak.store(blockPeak);
+
+        const bool blockNonZero = blockPeak > 0.0f;
+        if (blockNonZero)
+        {
+            if (! firstNonZeroLogged.exchange(true))
+            {
+                juce::Logger::writeToLog("[DAW] First non-zero output block: peak="
+                    + juce::String(blockPeak, 6)
+                    + " — audio is reaching the device output buffer.");
+            }
+            hadAudio.store(true);
+            silentStreak.store(0);
+        }
+        else if (hadAudio.load())
+        {
+            const int streak = silentStreak.fetch_add(1) + 1;
+            if (streak == 1)
+            {
+                juce::Logger::writeToLog("[DAW] Audio underrun suspected: output buffer"
+                    " went silent after producing audio. Check device routing and"
+                    " callback registration.");
+            }
+            if (streak == 4800)
+            {
+                juce::Logger::writeToLog("[DAW] Output buffer has been silent for ~5s"
+                    " (4800 blocks). Verify the selected output device is connected"
+                    " to the speakers/headphones you are monitoring.");
+            }
+        }
     }
 
     void releaseResources() override
@@ -481,6 +524,10 @@ private:
     std::atomic<float> masterGainTarget{0.8f};
     std::atomic<float> masterPeak{0.0f};
     juce::SmoothedValue<float> masterGainSmoothed{0.8f};
+
+    std::atomic<bool> firstNonZeroLogged{false};
+    std::atomic<bool> hadAudio{false};
+    std::atomic<int> silentStreak{0};
 
     juce::AudioBuffer<float> scratchBuffer;
     juce::AudioBuffer<float> midiTrackScratch;
