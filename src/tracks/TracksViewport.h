@@ -31,6 +31,7 @@ public:
                       int numSamples, bool anyTrackSoloed);
 
     bool anyTrackSoloed() const;
+    bool anyTrackAudible() const;
 
     const std::vector<std::unique_ptr<AudioTrack>>& getTracks() const { return tracks; }
     const std::vector<std::unique_ptr<TrackRow>>& getTrackRows() const { return trackRows; }

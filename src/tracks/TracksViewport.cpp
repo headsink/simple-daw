@@ -224,6 +224,15 @@ void TracksViewport::tryRenderAll(juce::AudioBuffer<float>& dest, int startSampl
         t->renderInto(dest, startSample, numSamples, anyTrackSoloedFlag);
 }
 
+bool TracksViewport::anyTrackAudible() const
+{
+    auto snap = tracksSnapshot.load(std::memory_order_acquire);
+    for (auto* t : *snap)
+        if (t->getSource().isPlaying())
+            return true;
+    return false;
+}
+
 void TracksViewport::publishSnapshot()
 {
     auto snap = std::make_shared<std::vector<AudioTrack*>>();

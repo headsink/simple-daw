@@ -159,7 +159,6 @@ public:
         updateSeqButtons();
 
         setWantsKeyboardFocus(true);
-        grabKeyboardFocus();
 
         startTimer(500);
     }
@@ -179,6 +178,9 @@ public:
 
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override
     {
+        audioBlockSize.store(samplesPerBlockExpected > 0 ? samplesPerBlockExpected : 0);
+        audioSampleRate.store(sampleRate > 0.0 ? sampleRate : 0.0);
+
         synthSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
         midiTrack.prepareToPlay(samplesPerBlockExpected, sampleRate);
         tracksViewport.prepareAllToPlay(samplesPerBlockExpected, sampleRate);
@@ -212,10 +214,6 @@ public:
             + " channels=" + juce::String(deviceManager.getCurrentAudioDevice()
                 ? deviceManager.getCurrentAudioDevice()->getActiveOutputChannels().toInteger()
                 : 0));
-
-        firstNonZeroLogged.store(false);
-        hadAudio.store(false);
-        silentStreak.store(0);
 
         updateStatus(deviceName, bufferSize, actualSampleRate);
     }
@@ -269,34 +267,30 @@ public:
         if (blockPeak > currentPeak)
             masterPeak.store(blockPeak);
 
-        const bool blockNonZero = blockPeak > 0.0f;
-        if (blockNonZero)
+        const double nowMs = juce::Time::getMillisecondCounterHiRes();
+        const double prevMs = lastCallbackMs.exchange(nowMs);
+        const double sr = audioSampleRate.load();
+        const int bs = audioBlockSize.load();
+        if (prevMs > 0.0 && sr > 0.0 && bs > 0)
         {
-            if (! firstNonZeroLogged.exchange(true))
-            {
-                juce::Logger::writeToLog("[DAW] First non-zero output block: peak="
-                    + juce::String(blockPeak, 6)
-                    + " — audio is reaching the device output buffer.");
-            }
-            hadAudio.store(true);
-            silentStreak.store(0);
+            const double periodMs = double(bs) / sr * 1000.0;
+            if ((nowMs - prevMs) > periodMs * 1.5)
+                realUnderruns.fetch_add(1);
         }
-        else if (hadAudio.load())
-        {
-            const int streak = silentStreak.fetch_add(1) + 1;
-            if (streak == 1)
-            {
-                juce::Logger::writeToLog("[DAW] Audio underrun suspected: output buffer"
-                    " went silent after producing audio. Check device routing and"
-                    " callback registration.");
-            }
-            if (streak == 4800)
-            {
-                juce::Logger::writeToLog("[DAW] Output buffer has been silent for ~5s"
-                    " (4800 blocks). Verify the selected output device is connected"
-                    " to the speakers/headphones you are monitoring.");
-            }
-        }
+
+        ++audioBlocksProduced;
+
+        bool keyHeld = false;
+        for (int n = 36; n <= 96 && !keyHeld; ++n)
+            if (synthSource.keyboardState.isNoteOnForChannels(0xffff, n))
+                keyHeld = true;
+
+        const bool audioExpected = midiTrack.isPlaying()
+            || tracksViewport.anyTrackAudible()
+            || keyHeld;
+
+        if (audioExpected && blockPeak <= 0.0f)
+            audioBlocksSilent.fetch_add(1);
     }
 
     void releaseResources() override
@@ -319,6 +313,12 @@ public:
     void resized() override
     {
         refreshLayout();
+    }
+
+    void visibilityChanged() override
+    {
+        if (isShowing() && ! hasKeyboardFocus(true))
+            grabKeyboardFocus();
     }
 
     bool keyPressed(const juce::KeyPress& key) override
@@ -359,6 +359,17 @@ public:
 
         for (const auto& row : tracksViewport.getTrackRows())
             row->refreshTimeLabel();
+
+        const int underrun = realUnderruns.exchange(0);
+        const int produced = audioBlocksProduced.exchange(0);
+        const int silent   = audioBlocksSilent.exchange(0);
+        if (underrun > 0)
+            juce::Logger::writeToLog("[DAW] " + juce::String(underrun)
+                + " real underrun(s) in last 500 ms (blocks=" + juce::String(produced)
+                + ", silent-when-expected=" + juce::String(silent) + ")");
+        else if (produced == 0)
+            juce::Logger::writeToLog("[DAW] No audio callbacks in last 500 ms"
+                " — audio device may be stopped.");
 
         updateSeqButtons();
         seqBeatLabel.setText(
@@ -525,9 +536,12 @@ private:
     std::atomic<float> masterPeak{0.0f};
     juce::SmoothedValue<float> masterGainSmoothed{0.8f};
 
-    std::atomic<bool> firstNonZeroLogged{false};
-    std::atomic<bool> hadAudio{false};
-    std::atomic<int> silentStreak{0};
+    std::atomic<int> audioBlocksProduced{0};
+    std::atomic<int> audioBlocksSilent{0};
+    std::atomic<int> realUnderruns{0};
+    std::atomic<double> lastCallbackMs{0.0};
+    std::atomic<int> audioBlockSize{0};
+    std::atomic<double> audioSampleRate{0.0};
 
     juce::AudioBuffer<float> scratchBuffer;
     juce::AudioBuffer<float> midiTrackScratch;

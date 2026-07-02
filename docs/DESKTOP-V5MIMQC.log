@@ -1,0 +1,56 @@
+00000001	0.00000000	21848	JUCE v8.0.13	
+00000002	0.23639800	21848	[DAW] prepareToPlay: device="Speakers (2- Komplete Audio 1)" type="Windows Audio" buffer=480 rate=48000.0Hz channels=3	
+00000003	0.23669299	21848	MIDI devices available: 0	
+00000004	0.23853891	21848	JUCE Assertion failure in components/juce_Component.cpp:3022	
+00000005	5.43038654	21848	[DAW] First non-zero output block: peak=0.055559 — audio is reaching the device output buffer.	
+00000006	5.69837093	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000007	5.99048662	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000008	6.29860878	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000009	15.57107830	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000010	22.03971291	21848	[DAW] prepareToPlay: device="Speakers (2- Komplete Audio 1)" type="Windows Audio (Exclusive Mode)" buffer=480 rate=44100.0Hz channels=3	
+00000011	27.44341850	21848	[DAW] First non-zero output block: peak=0.051591 — audio is reaching the device output buffer.	
+00000012	28.45532417	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000013	28.86760330	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000014	29.22751999	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000015	49.19180298	21848	[DAW] prepareToPlay: device="Speakers (2- Komplete Audio 1)" type="Windows Audio" buffer=480 rate=48000.0Hz channels=3	
+00000016	51.06448364	21848	[DAW] First non-zero output block: peak=0.058961 — audio is reaching the device output buffer.	
+00000017	51.22420502	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000018	51.58434296	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000019	51.99224472	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000020	53.89247894	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000021	54.39242172	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000022	54.66458893	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000023	54.97241592	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000024	65.85823059	21848	[DAW] prepareToPlay: device="Speakers (Realtek(R) Audio)" type="Windows Audio" buffer=480 rate=48000.0Hz channels=3	
+00000025	68.35827637	21848	[DAW] First non-zero output block: peak=0.016441 — audio is reaching the device output buffer.	
+00000026	68.48857880	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000027	68.89849091	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000028	69.17865753	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000029	69.51846313	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000030	69.83872223	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000031	70.09847260	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000032	70.31845093	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000033	70.55847168	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000034	71.25847626	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000035	71.87871552	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000036	72.47892761	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000037	72.72875214	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000038	72.97857666	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000039	73.19842529	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000040	73.39857483	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000041	73.59893036	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000042	75.45864868	26416	[26416:16864:20260702,082117.890:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\9c740612-4c6c-45a0-9bc2-6efc42fda70a: The system cannot find the file specified. (2)	
+00000043	75.45897675	26416	[26416:16864:20260702,082117.891:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\113851aa-1ea4-4d0f-9e7c-d23d1cefa727: The system cannot find the file specified. (2)	
+00000044	75.45924377	26416	[26416:16864:20260702,082117.891:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\4bf6980d-44a0-4891-b08b-6bb149160eb7: The system cannot find the file specified. (2)	
+00000045	75.53094482	26416	[26416:16864:20260702,082117.962:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\9c740612-4c6c-45a0-9bc2-6efc42fda70a: The system cannot find the file specified. (2)	
+00000046	75.53147888	26416	[26416:16864:20260702,082117.963:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\113851aa-1ea4-4d0f-9e7c-d23d1cefa727: The system cannot find the file specified. (2)	
+00000047	75.53196716	26416	[26416:16864:20260702,082117.963:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\4bf6980d-44a0-4891-b08b-6bb149160eb7: The system cannot find the file specified. (2)	
+00000048	75.53292847	26416	[26416:16864:20260702,082117.964:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\9c740612-4c6c-45a0-9bc2-6efc42fda70a: The system cannot find the file specified. (2)	
+00000049	75.53332520	26416	[26416:16864:20260702,082117.965:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\113851aa-1ea4-4d0f-9e7c-d23d1cefa727: The system cannot find the file specified. (2)	
+00000050	75.53379059	26416	[26416:16864:20260702,082117.965:ERROR filesystem_win.cc:130] GetFileAttributes C:\Users\User\AppData\Local\Dropbox\Crashpad\attachments\4bf6980d-44a0-4891-b08b-6bb149160eb7: The system cannot find the file specified. (2)	
+00000051	82.23917389	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000052	89.64774323	21848	[DAW] prepareToPlay: device="Speakers (2- Komplete Audio 1)" type="Windows Audio" buffer=480 rate=48000.0Hz channels=3	
+00000053	92.76190186	21848	[DAW] First non-zero output block: peak=0.023811 — audio is reaching the device output buffer.	
+00000054	92.98198700	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000055	93.48187256	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
+00000056	93.78997803	21848	[DAW] Audio underrun suspected: output buffer went silent after producing audio. Check device routing and callback registration.	
